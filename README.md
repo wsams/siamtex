@@ -23,6 +23,26 @@ You get a real editor (CodeMirror), a sandboxed **Docker TeX worker** (`pdflatex
 
 ---
 
+## Screenshots
+
+**Welcome & sign-in** — GitHub OAuth when you want it, or run locally without a sign-in wall.
+
+![SiamTeX welcome screen](docs/screenshots/not-signed-in.png)
+
+**Project dashboard** — your work, templates for articles, homework, and resumes, import/export zip.
+
+![SiamTeX project dashboard](docs/screenshots/signed-in-dashboard.png)
+
+**Editor + live PDF** — multi-file projects, toolbar inserts, compile errors you can click, preview beside your source.
+
+![SiamTeX editor with live PDF preview](docs/screenshots/edit-document.png)
+
+**Add files & assets** — upload images, spin up `.tex` partials, bibliographies, and sections without leaving the browser.
+
+![SiamTeX add file dialog](docs/screenshots/upload-files.png)
+
+---
+
 ## Features (v1)
 
 - Multi-file projects with syntax-highlighted editor
@@ -56,6 +76,7 @@ Details: [SPECS.md](./SPECS.md) · Future AI (BYOK): [AI.md](./AI.md)
 | `src/` | PHP domain logic |
 | `templates/` | Curated starter packages |
 | `config/` | Sample server configs (not secrets) |
+| `docs/screenshots/` | README marketing images (in git; blocked from HTTP on deploy) |
 | `AGENTS.md` | Agent + operator install runbook |
 | `data/` | SQLite, encrypted projects (**gitignored**) |
 

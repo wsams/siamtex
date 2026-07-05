@@ -16,16 +16,20 @@
         Require all granted
     </Directory>
 
-    # Block sensitive paths from HTTP access (defense in depth)
-    <DirectoryMatch "^/var/www/html/siamtex/(data|vendor|\.git)">
+    # Block non-public paths (see AGENTS.md — web surface vs repo)
+    <DirectoryMatch "^/var/www/html/siamtex/(data|vendor|work|config|scripts|docker|docs|src|templates|\.git|\.cursor)">
         Require all denied
     </DirectoryMatch>
+
+    <FilesMatch "\.(md|example|env|sqlite|key|enc)$">
+        Require all denied
+    </FilesMatch>
 
     <FilesMatch "^\.">
         Require all denied
     </FilesMatch>
 
-    <FilesMatch "\.(env|sqlite|key|enc)$">
+    <FilesMatch "^composer\.(json|lock)$">
         Require all denied
     </FilesMatch>
 

@@ -2,22 +2,26 @@
 #   cp config/htaccess.example .htaccess
 #
 # Requires AllowOverride (e.g. FileInfo or All) in the virtual host Directory block.
-# See config/apache-siamtex.conf.example
+# See config/apache-siamtex.conf.example and AGENTS.md § Repository vs deployment.
 
 Options -Indexes
 
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
-    # Block runtime and dependency trees (defense in depth)
-    RewriteRule ^data(/|$) - [F,L]
-    RewriteRule ^vendor(/|$) - [F,L]
-    RewriteRule ^work(/|$) - [F,L]
-    RewriteRule ^\.git(/|$) - [F,L]
+    # Runtime, source, operator docs — not for HTTP (see AGENTS.md)
+    RewriteRule ^(data|vendor|work|config|scripts|docker|docs|src|templates|\.git|\.cursor)(/|$) - [F,L]
 </IfModule>
 
 # Dotfiles (.env, .gitignore, …)
 <FilesMatch "^\.">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+</FilesMatch>
+
+# Repo docs and sample configs (AGENTS.md, README.md, *.example, …)
+<FilesMatch "\.(md|example)$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>
@@ -30,7 +34,7 @@ Options -Indexes
     </IfModule>
 </FilesMatch>
 
-# Composer autoload internals (vendor/ already blocked above)
+# Composer manifest (vendor/ already blocked above)
 <FilesMatch "^composer\.(json|lock)$">
     <IfModule mod_authz_core.c>
         Require all denied

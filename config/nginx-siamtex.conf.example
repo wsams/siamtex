@@ -15,7 +15,7 @@ server {
         try_files $uri $uri/ /index.php?$query_string;
     }
 
-    location ~ ^/(data|vendor|\.git) {
+    location ~ ^/(data|vendor|work|config|scripts|docker|docs|src|templates|\.git|\.cursor) {
         deny all;
         return 404;
     }
@@ -24,7 +24,11 @@ server {
         deny all;
     }
 
-    location ~* \.(env|sqlite|key|enc)$ {
+    location ~* \.(md|example|env|sqlite|key|enc)$ {
+        deny all;
+    }
+
+    location ~ ^/composer\.(json|lock)$ {
         deny all;
     }
 

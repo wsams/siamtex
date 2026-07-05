@@ -23,6 +23,8 @@ Collect from the human (ask if missing):
 
 Never commit secrets, `.htaccess`, or `data/` to git. Never write production URLs into tracked source files.
 
+**Web exposure:** the git tree is not the public web surface. Do not copy screenshots or admin files into served paths. Install deny rules (`config/htaccess.example`) and verify `AGENTS.md`, `config/`, and `docs/` return 403/404 — see AGENTS.md § Repository vs deployment.
+
 ## Deploy checklist
 
 ```
@@ -36,6 +38,7 @@ Never commit secrets, `.htaccess`, or `data/` to git. Never write production URL
 - [ ] install php-fpm systemd drop-in from config/php-fpm-siamtex.conf.example
 - [ ] configure web server from config/apache-* or config/nginx-*
 - [ ] cp config/htaccess.example .htaccess  (Apache)
+- [ ] verify AGENTS.md / config / docs NOT reachable over HTTP (403/404)
 - [ ] restart php-fpm + web server
 - [ ] curl api/auth_me.php — JSON OK
 - [ ] browser: create project, compile PDF

@@ -2,7 +2,7 @@
 
 These files are **templates only**. Copy them to your server and edit paths, hostnames, and secrets. Do not commit real credentials or production URLs into git.
 
-**AI agents:** follow [AGENTS.md](../AGENTS.md) end-to-end. This directory supplies the files referenced in that runbook.
+**AI agents:** follow [AGENTS.md](../AGENTS.md) end-to-end — especially **Repository vs deployment vs web exposure** (do not treat the whole clone as public HTTP content). This directory supplies the files referenced in that runbook.
 
 ## Quick checklist
 

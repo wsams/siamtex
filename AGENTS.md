@@ -66,6 +66,84 @@ Compiles: PHP decrypts → temp dir → `docker run --network=none … latexmk` 
 
 ---
 
+## Repository vs deployment vs web exposure
+
+The git clone is **not** the same thing as “everything that should be browsable.” On many servers the app root *is* the DocumentRoot (e.g. `/var/www/html/siamtex`), so **every file in the tree is a candidate for HTTP access** unless you block it. Agents must separate three concerns:
+
+| Layer | What it is | Agent mindset |
+|-------|------------|---------------|
+| **Git repository** | Source, docs, runbooks, samples, skills | OK to commit; not all of it belongs on a public URL |
+| **Deployment tree** | Files on the server that run the app | Install only what the service needs; create runtime dirs (`data/`) |
+| **Web surface** | URLs that should return 200 to anonymous users | **Small allow-list** — see below |
+
+### Intentionally web-accessible
+
+These paths are **meant** to be served over HTTP:
+
+| Path | Why |
+|------|-----|
+| `index.php` | App shell |
+| `api/*.php` | JSON, PDF, auth endpoints |
+| `assets/*` | CSS, JS, favicons (public static UI) |
+| `favicon.ico` | Tab icon |
+
+Everything else is loaded by PHP from disk (e.g. `src/`, `templates/`, `vendor/`) and **must not** be directly fetchable.
+
+### In the repo but must NOT be web-accessible
+
+Do **not** treat a full `git clone` as public content. Block HTTP access to:
+
+| Path / pattern | Examples | Why |
+|----------------|----------|-----|
+| Runtime & secrets | `data/`, `work/`, `*.sqlite`, `*.enc` | User documents, keys, DB |
+| Dependencies & source | `vendor/`, `src/` | Implementation detail; supply-chain risk |
+| Operator / docs | `AGENTS.md`, `README.md`, `SPECS.md`, `CONTRIBUTING.md`, `docs/` | Runbooks, marketing screenshots, specs |
+| Deploy samples | `config/`, `scripts/`, `docker/`, `.cursor/` | Samples and tooling — not for visitors |
+| Templates on disk | `templates/` | Served via API logic, not direct download |
+| VCS & dotfiles | `.git/`, `.gitignore`, `.env` | Standard hardening |
+
+**Screenshots and marketing assets** (e.g. README PNGs) belong in **`docs/`** in git — or **outside the web root entirely** on the admin workstation. **Never** copy them into the DocumentRoot root, `assets/`, or other served paths unless they are deliberate public static files (they are not, today).
+
+### What agents must not do during install
+
+- Copy personal or marketing files (screenshots, edited PNGs, home-directory paths) into the web root “for convenience”
+- Add new directories under the app root without checking whether HTTP access is intended
+- Assume “it’s in the repo” ⇒ “it should be deployable as-is over HTTP”
+- Skip `.htaccess` / nginx `deny` rules because “Apache already has a vhost”
+- Commit server-specific `.htaccess`, `.env`, or `data/` back to git
+
+### What agents should do
+
+1. **Deploy the application**, not the entire monorepo mindset — same directory is fine, but **lock down the web surface**.
+2. Install **`config/htaccess.example` → `.htaccess`** (Apache) or equivalent nginx rules (see `config/`).
+3. Store secrets in **`/etc/siamtex.env`**, never under the web tree.
+4. Put optional README/marketing images in **`docs/`** (tracked in git) and verify they return **403/404** over HTTP after install.
+5. Prefer **`docs/screenshots/`** for any future screenshot set — never `/screenshots/` at repo root without deny rules.
+
+### Verify web exposure after install
+
+Replace `BASE` with the public URL (e.g. `https://YOUR_HOST/siamtex`):
+
+```bash
+# Should succeed (200)
+curl -sS -o /dev/null -w "app.js %{http_code}\n" "$BASE/assets/app.js"
+curl -sS -o /dev/null -w "api %{http_code}\n" "$BASE/api/auth_me.php"
+
+# Should fail (403 or 404) — adjust paths if you add docs/screenshots/
+curl -sS -o /dev/null -w "AGENTS.md %{http_code}\n" "$BASE/AGENTS.md"
+curl -sS -o /dev/null -w "config %{http_code}\n" "$BASE/config/siamtex.env.example"
+curl -sS -o /dev/null -w "data %{http_code}\n" "$BASE/data/"
+curl -sS -o /dev/null -w "docs %{http_code}\n" "$BASE/docs/"
+```
+
+If any blocked path returns **200**, fix Apache/Nginx/`.htaccess` before handing off.
+
+### Optional: split docroot (advanced)
+
+For stricter separation, point DocumentRoot at a **`public/`** subtree only (not implemented in v1). Until then, **deny rules** on the full tree are required.
+
+---
+
 ## Install workflow
 
 Copy this checklist and mark steps as you go:
@@ -80,9 +158,10 @@ Deploy progress:
 - [ ] 6. Environment file installed
 - [ ] 7. PHP-FPM loads environment
 - [ ] 8. Web server configured
-- [ ] 9. .htaccess installed (Apache)
-- [ ] 10. Smoke tests passed
-- [ ] 11. OAuth configured (if requested)
+- [ ] 9. .htaccess installed (Apache) — blocks non-public paths
+- [ ] 10. Web exposure verified (docs/config/data return 403/404)
+- [ ] 11. Smoke tests passed
+- [ ] 12. OAuth configured (if requested)
 ```
 
 ### 1. Prerequisites
@@ -210,9 +289,13 @@ Replace `YOUR_HOST` and paths. Reload the web server after edits.
 cp config/htaccess.example .htaccess
 ```
 
-`.htaccess` is **gitignored** — each server keeps its own copy. Blocks HTTP access to `data/`, `vendor/`, `work/`, dotfiles, and sensitive extensions.
+`.htaccess` is **gitignored** — each server keeps its own copy. Blocks HTTP access to runtime dirs, source, docs, config samples, and markdown (see **Repository vs deployment vs web exposure** above).
 
-### 10. Smoke tests
+### 10. Verify web exposure
+
+Run the `curl` checks in [Repository vs deployment vs web exposure](#repository-vs-deployment-vs-web-exposure). Fix deny rules before smoke tests if `AGENTS.md`, `config/`, or `docs/` are reachable.
+
+### 11. Smoke tests
 
 **Worker (already run in step 4):**
 
@@ -235,7 +318,7 @@ Expect JSON with `authRequired`, `oauthConfigured`, etc.
 3. Confirm PDF preview updates after edit.
 4. Export zip.
 
-### 11. GitHub OAuth (human + agent)
+### 12. GitHub OAuth (human + agent)
 
 **Human:** create OAuth App at https://github.com/settings/developers  
 **Agent:** write credentials to `/etc/siamtex.env`, restart php-fpm, verify sign-in flow.
@@ -248,6 +331,8 @@ Agents must **not**:
 
 - Commit `.env`, `/etc/siamtex.env`, `.htaccess`, `data/`, `work/`, or `vendor/`
 - Put production hostnames in tracked source files
+- Copy marketing screenshots or admin-only assets into web-served paths (`assets/`, repo root, etc.)
+- Leave repo-only paths (`docs/`, `config/`, `AGENTS.md`, …) reachable over HTTP after install
 - Disable Docker sandbox flags (`--network=none`, memory limits, read-only root)
 - Expose `data/` or `.git` over HTTP
 - Log OAuth secrets or encryption keys
@@ -256,6 +341,8 @@ Agents **should**:
 
 - Use templates in `config/*.example` only
 - Prefer TLS for public deployments
+- Apply and verify deny rules (`.htaccess` or nginx) for non-public paths
+- Keep README/marketing images in `docs/` and confirm they are not browsable
 - Report permission or ownership issues instead of `chmod 777`
 
 See [SPECS.md](./SPECS.md) §5 (security requirements) for product-level constraints.
@@ -272,6 +359,8 @@ See [SPECS.md](./SPECS.md) §5 (security requirements) for product-level constra
 | Permission denied on `data/` | Wrong owner | `chown www-data:www-data data` |
 | 403 on mutating API | Missing CSRF header from UI | Use the web UI; custom clients need `X-SiamTeX-CSRF: 1` |
 | `.htaccess` ignored | `AllowOverride None` | Update Apache Directory block per sample |
+| `README.md` or `docs/` browsable | Deny rules missing or not loaded | Install `config/htaccess.example`; reload web server; re-run exposure curls |
+| Screenshots accidentally in web root | Agent copied admin files into deploy path | Move to `docs/` or off-server; add deny rules; never commit private paths |
 
 **Logs:** PHP-FPM journal, web server error log, compile output in the app’s build log panel.
 
