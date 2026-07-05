@@ -1,0 +1,38 @@
+# Apache — copy to the SiamTeX web root as .htaccess
+#   cp config/htaccess.example .htaccess
+#
+# Requires AllowOverride (e.g. FileInfo or All) in the virtual host Directory block.
+# See config/apache-siamtex.conf.example
+
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Block runtime and dependency trees (defense in depth)
+    RewriteRule ^data(/|$) - [F,L]
+    RewriteRule ^vendor(/|$) - [F,L]
+    RewriteRule ^work(/|$) - [F,L]
+    RewriteRule ^\.git(/|$) - [F,L]
+</IfModule>
+
+# Dotfiles (.env, .gitignore, …)
+<FilesMatch "^\.">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+</FilesMatch>
+
+# Secrets, databases, encrypted blobs
+<FilesMatch "\.(env|sqlite|sqlite3|key|enc)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+</FilesMatch>
+
+# Composer autoload internals (vendor/ already blocked above)
+<FilesMatch "^composer\.(json|lock)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+</FilesMatch>

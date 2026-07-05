@@ -1,0 +1,8 @@
+{
+  "id": "resume",
+  "name": "Resume / CV",
+  "description": "One-page resume package: main.tex plus section partials you can edit.",
+  "category": "career",
+  "mainFile": "main.tex",
+  "engine": "pdflatex"
+}

@@ -1,0 +1,8 @@
+{
+  "id": "blank",
+  "name": "Blank article",
+  "description": "Minimal article starter (main.tex).",
+  "category": "general",
+  "mainFile": "main.tex",
+  "engine": "pdflatex"
+}

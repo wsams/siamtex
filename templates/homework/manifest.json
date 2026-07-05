@@ -1,0 +1,8 @@
+{
+  "id": "homework",
+  "name": "Homework assignment",
+  "description": "Problem-set layout with math packages (main.tex).",
+  "category": "school",
+  "mainFile": "main.tex",
+  "engine": "pdflatex"
+}

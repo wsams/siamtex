@@ -1,0 +1,12 @@
+# systemd drop-in for php-fpm — loads SiamTeX environment variables
+#
+# Install (Debian/Ubuntu example for php8.3-fpm):
+#   sudo mkdir -p /etc/systemd/system/php8.3-fpm.service.d
+#   sudo cp config/php-fpm-siamtex.conf.example /etc/systemd/system/php8.3-fpm.service.d/siamtex.conf
+#   sudo systemctl daemon-reload
+#   sudo systemctl restart php8.3-fpm
+#
+# Ensure /etc/siamtex.env exists (from config/siamtex.env.example) and is readable by www-data.
+
+[Service]
+EnvironmentFile=/etc/siamtex.env

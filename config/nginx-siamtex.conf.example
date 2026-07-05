@@ -1,0 +1,46 @@
+# Nginx — sample server block for SiamTeX + PHP-FPM
+# Adjust root, server_name, and fastcgi_pass socket for your system.
+
+server {
+    listen 443 ssl http2;
+    server_name YOUR_HOST;
+
+    root /var/www/html/siamtex;
+    index index.php;
+
+    # ssl_certificate     /etc/letsencrypt/live/YOUR_HOST/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/YOUR_HOST/privkey.pem;
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ ^/(data|vendor|\.git) {
+        deny all;
+        return 404;
+    }
+
+    location ~ /\. {
+        deny all;
+    }
+
+    location ~* \.(env|sqlite|key|enc)$ {
+        deny all;
+    }
+
+    location ~ \.php$ {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        fastcgi_read_timeout 120s;
+    }
+
+    access_log /var/log/nginx/siamtex-access.log;
+    error_log  /var/log/nginx/siamtex-error.log;
+}
+
+# server {
+#     listen 80;
+#     server_name YOUR_HOST;
+#     return 301 https://$host$request_uri;
+# }

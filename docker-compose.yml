@@ -1,0 +1,30 @@
+# SiamTeX — local / droplet stack
+# Usage:
+#   docker compose build tex-worker
+#   docker compose run --rm -v "$PWD/work:/work" tex-worker
+#
+# App services (web, db) will be added as the PHP application lands.
+# The TeX worker is intentionally installable on its own.
+
+services:
+  tex-worker:
+    build:
+      context: ./docker/tex-worker
+      dockerfile: Dockerfile
+    image: siamtex-tex-worker:local
+    # Sandbox defaults — PHP/orchestrator should pass the same flags for jobs
+    network_mode: none
+    mem_limit: 512m
+    cpus: 1.0
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    volumes:
+      # Mount a project directory at /work for compile jobs
+      - ${SIAMTEX_WORK_DIR:-./work}:/work
+    working_dir: /work
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    # Override command per job, e.g.:
+    # docker compose run --rm tex-worker -pdf -interaction=nonstopmode main.tex

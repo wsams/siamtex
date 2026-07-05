@@ -1,0 +1,15 @@
+{
+  "name": "wsams/siamtex",
+  "description": "SiamTeX — write and render LaTeX in the browser",
+  "type": "project",
+  "license": "MIT",
+  "require": {
+    "php": ">=8.2",
+    "league/oauth2-github": "^3.1"
+  },
+  "autoload": {
+    "psr-4": {
+      "SiamTeX\\": "src/"
+    }
+  }
+}

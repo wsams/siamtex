@@ -1,0 +1,40 @@
+# Runtime data & secrets (never commit)
+/data/
+/work/
+*.enc
+master.key
+session_secret.txt
+*.sqlite
+*.sqlite-*
+
+# Environment & local overrides
+.env
+.env.*
+!.env.example
+.htaccess
+docker-compose.override.yml
+*.local.php
+
+# Dependencies
+/vendor/
+/node_modules/
+
+# Build / TeX artifacts (outside ignored dirs)
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.bbl
+*.blg
+*.toc
+*.pdf
+
+# OS & editor junk
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/

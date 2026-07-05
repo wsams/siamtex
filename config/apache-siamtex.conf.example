@@ -1,0 +1,40 @@
+# Apache 2.4 — sample virtual host for SiamTeX
+# Adjust DocumentRoot, ServerName, and TLS paths for your deployment.
+
+<VirtualHost *:443>
+    ServerName YOUR_HOST
+    DocumentRoot /var/www/html/siamtex
+
+    SSLEngine on
+    # SSLCertificateFile /etc/letsencrypt/live/YOUR_HOST/fullchain.pem
+    # SSLCertificateKeyFile /etc/letsencrypt/live/YOUR_HOST/privkey.pem
+
+    <Directory /var/www/html/siamtex>
+        Options -Indexes +FollowSymLinks
+        # Allow .htaccess rules (copy config/htaccess.example → .htaccess)
+        AllowOverride FileInfo Options AuthConfig
+        Require all granted
+    </Directory>
+
+    # Block sensitive paths from HTTP access (defense in depth)
+    <DirectoryMatch "^/var/www/html/siamtex/(data|vendor|\.git)">
+        Require all denied
+    </DirectoryMatch>
+
+    <FilesMatch "^\.">
+        Require all denied
+    </FilesMatch>
+
+    <FilesMatch "\.(env|sqlite|key|enc)$">
+        Require all denied
+    </FilesMatch>
+
+    ErrorLog ${APACHE_LOG_DIR}/siamtex-error.log
+    CustomLog ${APACHE_LOG_DIR}/siamtex-access.log combined
+</VirtualHost>
+
+# Redirect HTTP to HTTPS (optional)
+# <VirtualHost *:80>
+#     ServerName YOUR_HOST
+#     Redirect permanent / https://YOUR_HOST/
+# </VirtualHost>
