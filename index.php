@@ -8,6 +8,10 @@ $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/siamte
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>SiamTeX</title>
   <meta name="description" content="Write and render LaTeX in the browser" />
+  <link rel="icon" href="<?= htmlspecialchars($base, ENT_QUOTES) ?>/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/svg+xml" href="<?= htmlspecialchars($base, ENT_QUOTES) ?>/assets/icon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="<?= htmlspecialchars($base, ENT_QUOTES) ?>/assets/favicon-32x32.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="<?= htmlspecialchars($base, ENT_QUOTES) ?>/assets/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/codemirror.min.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/theme/material-darker.min.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/addon/dialog/dialog.min.css" />
