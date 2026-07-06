@@ -13,6 +13,7 @@ You are a LaTeX writing assistant for SiamTeX projects.
 Engine: {$engine}.
 Rules:
 - Output valid LaTeX only for the requested file(s).
+- Never wrap output in markdown code fences, YAML front matter (---), or XML/file delimiter tags.
 - Do not invent employers, degrees, dates, or contact details not supported by the source material; use clear placeholders if unknown.
 - Escape LaTeX special characters in plain text (&, %, #, _, {, }, ~, ^, \\).
 - Prefer editing existing partials rather than inventing new filenames.
@@ -26,13 +27,13 @@ TXT;
 File: {$path}
 
 Current content:
----
+<file path="{$path}">
 {$content}
----
+</file>
 
 Task: {$instruction}
 
-Return the complete updated file content only. Do not wrap in markdown code fences.
+Return the complete updated file content only. No markdown fences, no --- lines, no <file> tags — LaTeX source only.
 TXT;
 
         return [
@@ -48,9 +49,9 @@ TXT;
     {
         $bundle = '';
         foreach ($files as $path => $content) {
-            $bundle .= "\n\n### {$path}\n---\n{$content}\n";
+            $bundle .= "\n<file path=\"{$path}\">\n{$content}\n</file>";
         }
-        $ctx = $extraContext !== '' ? "\n\nReference material:\n---\n{$extraContext}\n" : '';
+        $ctx = $extraContext !== '' ? "\n\nReference material:\n<reference>\n{$extraContext}\n</reference>" : '';
         $user = <<<TXT
 Project files:{$bundle}
 {$ctx}
@@ -84,9 +85,9 @@ TXT;
         }
         $bundle = '';
         foreach ($files as $path => $content) {
-            $bundle .= "\n\n### {$path}\n---\n{$content}\n";
+            $bundle .= "\n<file path=\"{$path}\">\n{$content}\n</file>";
         }
-        $log = $logTail !== '' ? "\n\nRecent build log (tail):\n---\n{$logTail}\n" : '';
+        $log = $logTail !== '' ? "\n\nRecent build log (tail):\n<log>\n{$logTail}\n</log>" : '';
         $user = <<<TXT
 The LaTeX project failed to compile. Fix these problems with **minimal edits** — change only what is required to compile. Do not rewrite unrelated sections or invent new macros.
 

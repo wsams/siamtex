@@ -46,9 +46,29 @@ final class LogParser
                 }
                 $diags[] = [
                     'severity' => 'error',
-                    'file' => $currentFile,
+                    'file' => $currentFile ?: null,
                     'line' => $lineNo,
                     'message' => $msg,
+                ];
+                continue;
+            }
+
+            if (preg_match('/^==>\\s+Fatal error occurred/i', $line)) {
+                $diags[] = [
+                    'severity' => 'error',
+                    'file' => $currentFile ?: null,
+                    'line' => null,
+                    'message' => trim($line),
+                ];
+                continue;
+            }
+
+            if (preg_match('/^Latexmk:\\s+(.+error.+)$/i', $line, $m)) {
+                $diags[] = [
+                    'severity' => 'error',
+                    'file' => $currentFile ?: null,
+                    'line' => null,
+                    'message' => 'Latexmk: ' . trim($m[1]),
                 ];
                 continue;
             }
@@ -61,7 +81,7 @@ final class LogParser
                 }
                 $diags[] = [
                     'severity' => 'warning',
-                    'file' => $currentFile,
+                    'file' => $currentFile ?: null,
                     'line' => $lineNo,
                     'message' => rtrim($msg, '.'),
                 ];
@@ -72,7 +92,7 @@ final class LogParser
                 || preg_match('/^Underfull \\\\hbox.*at lines? (\\d+)/i', $line, $m)) {
                 $diags[] = [
                     'severity' => 'warning',
-                    'file' => $currentFile,
+                    'file' => $currentFile ?: null,
                     'line' => (int) $m[1],
                     'message' => trim($line),
                 ];
@@ -98,6 +118,9 @@ final class LogParser
         $f = str_replace('\\', '/', $f);
         if (str_starts_with($f, './')) {
             $f = substr($f, 2);
+        }
+        if (str_contains($f, 'texmf') || str_contains($f, 'texlive')) {
+            return '';
         }
         // Prefer project-relative basename paths
         if (str_contains($f, '/')) {

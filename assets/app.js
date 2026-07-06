@@ -1073,7 +1073,10 @@
       state.project.hasPdf = result.hasPdf;
       renderFileList();
       renderProblems();
-      updateStatusDot(result.status === 'error' ? 'error' : 'ok');
+      const dotKind = result.status === 'error' ? 'error'
+        : result.status === 'ok_with_warnings' ? 'warn'
+          : 'ok';
+      updateStatusDot(dotKind);
       if (result.hasPdf) refreshPdf();
       if (!silent) {
         toast(result.status === 'error' ? 'Compile failed — see Problems' : 'Compiled', result.status === 'error' ? 'error' : 'ok');
@@ -1094,6 +1097,36 @@
     frame.src = BASE + '/api/pdf.php?id=' + encodeURIComponent(state.project.id) + token + '&t=' + Date.now();
   }
 
+  function diagLocation(d) {
+    const fallback = state.project?.mainFile || 'main.tex';
+    let file = (d.file || '').replace(/\\/g, '/');
+    if (!file || file.includes('texmf') || file.includes('texlive')) {
+      file = fallback;
+    } else {
+      const parts = file.split('/');
+      if (parts.length > 2) {
+        file = parts.slice(-2).join('/');
+      }
+    }
+    return file + (d.line ? ':' + d.line : '');
+  }
+
+  function logProblemFallback(log) {
+    if (!log) return '';
+    const lines = log.split(/\r?\n/);
+    const hits = [];
+    for (const line of lines) {
+      if (/^!\s/.test(line) || /^==>\s+Fatal error/i.test(line) || /^Latexmk:\s+.*error/i.test(line)) {
+        hits.push(line);
+      }
+    }
+    if (hits.length) {
+      return hits.slice(0, 12).join('\n');
+    }
+    const tail = lines.filter((l) => l.trim()).slice(-18);
+    return tail.join('\n');
+  }
+
   function renderProblems() {
     const body = document.getElementById('problemsBody');
     if (!body) return;
@@ -1105,6 +1138,13 @@
     const errors = diags.filter((d) => d.severity === 'error');
     const canFix = canEditProject(state.project) && state.aiEnabled && errors.length > 0;
     if (!diags.length) {
+      if (state.build?.status === 'error' || state.build?.status === 'ok_with_warnings') {
+        const fallback = logProblemFallback(state.build?.log || '');
+        if (fallback) {
+          body.innerHTML = `<div class="pill" style="margin-bottom:8px">Could not parse structured problems — showing log excerpt:</div><div class="log-view">${esc(fallback)}</div>`;
+          return;
+        }
+      }
       body.innerHTML = '<div class="pill">No problems from the last build. Click Compile when you are ready.</div>';
       return;
     }
@@ -1113,15 +1153,17 @@
       : '';
     body.innerHTML = fixBar + diags.map((d, i) => `
       <div class="diag" data-i="${i}">
-        <span class="sev-${esc(d.severity)}">${esc(d.severity)}</span>
-        <span>${esc(d.message)}</span>
-        <span class="loc">${esc(d.file || state.project.mainFile)}${d.line ? ':' + d.line : ''}</span>
+        <span class="diag-sev sev-${esc(d.severity)}">${esc(d.severity)}</span>
+        <span class="diag-msg">${esc(d.message || '(no message)')}</span>
+        <span class="diag-loc">${esc(diagLocation(d))}</span>
       </div>`).join('');
     document.getElementById('btnAiFixProblems')?.addEventListener('click', () => showAiFixProblems(errors));
     body.querySelectorAll('.diag').forEach((el) => {
       el.onclick = async () => {
         const d = diags[Number(el.getAttribute('data-i'))];
-        const file = d.file && !String(d.file).includes('texmf') ? d.file : state.project.mainFile;
+        const file = d.file && !String(d.file).includes('texmf') && !String(d.file).includes('texlive')
+          ? d.file
+          : state.project.mainFile;
         if (file && file !== state.activePath && state.files.some((f) => f.path === file)) {
           await loadFile(file);
         }
@@ -1138,7 +1180,7 @@
     if (!el) return;
     if (!kind) {
       const s = state.build?.status;
-      kind = s === 'error' ? 'error' : s ? 'ok' : '';
+      kind = s === 'error' ? 'error' : s === 'ok_with_warnings' ? 'warn' : s ? 'ok' : '';
     }
     el.className = 'status-dot ' + (kind || '');
   }
@@ -1544,7 +1586,11 @@
           acceptBtn.classList.remove('hidden');
         } else {
           const names = Object.keys(data.result.files || {}).join(', ');
+          const notes = (data.result.notes || []).filter(Boolean);
           prev.innerHTML = `<h3>${esc(data.result.summary)}</h3><p>Files: ${esc(names)}</p>`;
+          if (notes.length) {
+            prev.innerHTML += `<div class="ai-notes"><strong>Notes</strong>${notes.map((n) => `<p>${esc(n)}</p>`).join('')}</div>`;
+          }
           for (const [fp, body] of Object.entries(data.result.files || {})) {
             prev.innerHTML += `<h4>${esc(fp)}</h4><pre>${esc(String(body).slice(0, 4000))}</pre>`;
           }
@@ -1620,8 +1666,8 @@
         <h2>AI fix compile problems</h2>
         <p class="ai-disclaimer"><strong>Alpha / experimental.</strong> Sends compile errors and affected files to your AI provider. Fixes are not guaranteed — quality depends on your model. Review every change before accepting.</p>
         <div class="ai-error-list">${errors.map((d) => `
-          <div class="pill"><strong>${esc(d.severity)}</strong> ${esc(d.message)}
-          <span class="loc">${esc(d.file || state.project.mainFile)}${d.line ? ':' + d.line : ''}</span></div>`).join('')}</div>
+          <div class="pill"><strong>${esc(d.severity)}</strong> ${esc(d.message || '(no message)')}
+          <span class="loc">${esc(diagLocation(d))}</span></div>`).join('')}</div>
         <div id="aiFixWaitMount" class="ai-wait-mount hidden"></div>
         <div id="aiFixPreview" class="ai-preview hidden"></div>
         <div class="modal-actions">

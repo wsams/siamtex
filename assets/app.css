@@ -372,13 +372,21 @@ button.tb:hover {
 .ai-error-list .pill { text-align: left; line-height: 1.4; }
 .problems-body { padding: 8px 12px; font-family: var(--mono); font-size: 0.82rem; }
 .diag {
-  display: grid; grid-template-columns: 70px 1fr auto; gap: 8px;
-  padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.04);
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  grid-template-areas:
+    "sev msg"
+    ". loc";
+  gap: 2px 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
   cursor: pointer;
 }
-.diag .sev-error { color: var(--bad); font-weight: 700; }
-.diag .sev-warning { color: var(--warn); font-weight: 700; }
-.diag .loc { color: var(--muted); }
+.diag-sev { grid-area: sev; font-weight: 700; text-transform: capitalize; }
+.diag-msg { grid-area: msg; word-break: break-word; line-height: 1.35; }
+.diag-loc { grid-area: loc; color: var(--muted); font-size: 0.76rem; }
+.diag .sev-error { color: var(--bad); }
+.diag .sev-warning { color: var(--warn); }
 .log-view { white-space: pre-wrap; color: var(--muted); max-height: 140px; overflow: auto; }
 
 .modal-backdrop {
@@ -410,6 +418,13 @@ button.tb:hover {
   color: var(--muted); margin: 0 0 10px;
 }
 .ai-preview.hidden { display: none; }
+.ai-notes {
+  margin: 10px 0; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.08);
+  font-size: 0.85rem;
+}
+.ai-notes p { margin: 4px 0 0; color: var(--text); }
 .ai-wait-mount { margin-top: 12px; }
 .ai-wait-mount.hidden { display: none; }
 .ai-wait {
@@ -535,6 +550,7 @@ body.ai-busy .modal-backdrop .modal { pointer-events: auto; }
   background: var(--muted);
 }
 .status-dot.ok { background: var(--good); }
+.status-dot.warn { background: var(--warn); }
 .status-dot.error { background: var(--bad); }
 .status-dot.busy { background: var(--accent); animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: 0.4; } }

@@ -15,7 +15,7 @@ LaTeX is still the gold standard for academic writing — but the toolchain is i
 | For students | For researchers & professionals |
 |--------------|----------------------------------|
 | Start from **homework** or **blank** templates with editable starter text | Multi-file **article** projects with `refs.bib` and natbib |
-| **Toolbar inserts** for bold, headings, math, lists, tables — no memorizing `\begin{}` | Side-by-side **PDF preview** with debounced auto-compile |
+| **Toolbar / Insert menus** for bold, headings, math, lists, tables — no memorizing `\begin{}` | Side-by-side **PDF preview** with debounced auto-compile |
 | **Clickable compile errors** that jump to the offending line | Import/export **zip**, **share links**, page estimates, geometry tools |
 | **AI fix problems** when the build breaks — review before applying | **Version history** with branching undo and diff-before-restore |
 | Resume package with partials (experience, education, skills) | **AES-256-GCM encryption at rest** for sources and PDFs |
@@ -51,27 +51,59 @@ Traffic path: **browser → your PHP server → provider you configure** (never 
 
 ## Screenshots
 
+Click any image for the full-size capture. Thumbnails keep the README readable on GitHub.
+
+### Getting started
+
 **Welcome & sign-in** — GitHub OAuth when you want it, or run locally without a sign-in wall.
 
-![SiamTeX welcome screen](docs/screenshots/not-signed-in.png)
+<a href="docs/screenshots/not-signed-in.png"><img src="docs/screenshots/not-signed-in-thumb.png" alt="SiamTeX welcome screen" width="480" /></a>
 
 **Project dashboard** — your work, templates for articles, homework, and resumes, import/export zip.
 
-![SiamTeX project dashboard](docs/screenshots/signed-in-dashboard.png)
+<a href="docs/screenshots/signed-in-dashboard.png"><img src="docs/screenshots/signed-in-dashboard-thumb.png" alt="SiamTeX project dashboard" width="480" /></a>
 
-**Editor + live PDF** — multi-file projects, toolbar inserts, compile errors you can click, preview beside your source.
+**Editor + live PDF** — multi-file projects, Insert menus for common LaTeX, compile errors you can click, preview beside your source.
 
-![SiamTeX editor with live PDF preview](docs/screenshots/edit-document.png)
+<a href="docs/screenshots/edit-document.png"><img src="docs/screenshots/edit-document-thumb.png" alt="SiamTeX editor with live PDF preview" width="480" /></a>
 
 **Add files & assets** — upload images, spin up `.tex` partials, bibliographies, and sections without leaving the browser.
 
-![SiamTeX add file dialog](docs/screenshots/upload-files.png)
+<a href="docs/screenshots/upload-files.png"><img src="docs/screenshots/upload-files-thumb.png" alt="SiamTeX add file dialog" width="480" /></a>
+
+### AI assist *(alpha)*
+
+End-to-end example: ask the model to turn a blank article into a pancake recipe, review the suggestion, accept, and compile. AI runs on the provider you configure (here, Ollama over Tailscale).
+
+**1. New project** — pick a template and name; *Blank article* is enough when the AI will write the body.
+
+<a href="docs/screenshots/ai-01-new-project.png"><img src="docs/screenshots/ai-01-new-project-thumb.png" alt="Create a new Pancake Recipe project" width="480" /></a>
+
+**2. Starter editor** — default `main.tex` and an empty PDF preview before you invoke AI.
+
+<a href="docs/screenshots/ai-02-blank-editor.png"><img src="docs/screenshots/ai-02-blank-editor-thumb.png" alt="Blank project editor before AI" width="480" /></a>
+
+**3. AI assist dialog** — click **AI**, choose scope (*Current file* or whole project), type a plain-English instruction, optional reference text, or a preset (*Polish*, *Fix LaTeX*, *Expand*).
+
+<a href="docs/screenshots/ai-03-ai-dialog.png"><img src="docs/screenshots/ai-03-ai-dialog-thumb.png" alt="AI assist dialog with pancake recipe instruction" width="480" /></a>
+
+**4. While it runs** — progress UI with elapsed time and cancel; local models over Tailscale may take a minute or two.
+
+<a href="docs/screenshots/ai-04-ai-running.png"><img src="docs/screenshots/ai-04-ai-running-thumb.png" alt="AI assist progress while the model runs" width="480" /></a>
+
+**5. Review suggestion** — read the proposed LaTeX in the preview; click **Accept into editor** only when it looks right.
+
+<a href="docs/screenshots/ai-05-ai-suggestion.png"><img src="docs/screenshots/ai-05-ai-suggestion-thumb.png" alt="AI returns suggested LaTeX for review" width="480" /></a>
+
+**6. After accept** — updated source in the editor and a rendered PDF from **Compile** (auto-compile also runs after accept).
+
+<a href="docs/screenshots/ai-06-pdf-result.png"><img src="docs/screenshots/ai-06-pdf-result-thumb.png" alt="Rendered PDF after accepting AI edits" width="480" /></a>
 
 ---
 
 ## Features
 
-- Multi-file projects with syntax-highlighted editor and beginner insert toolbar
+- Multi-file projects with syntax-highlighted editor and Insert menus for common LaTeX
 - Live PDF preview and structured compile diagnostics (file, line, severity)
 - Curated templates: blank, homework, resume (multi-file), academic article
 - Import / export zip · share links · author tools (page estimate, geometry)

@@ -21,6 +21,33 @@ final class AiResponseParser
         return $t;
     }
 
+    /** Remove markdown / prompt delimiter artifacts models sometimes echo back. */
+    public static function sanitizeLatex(string $text): string
+    {
+        $t = trim($text);
+        if ($t === '') {
+            return $t;
+        }
+
+        if (preg_match('/^---\s*\R/', $t)) {
+            if (preg_match('/^---\s*\R([\s\S]*?)\R---\s*$/', $t, $m)) {
+                $t = trim($m[1]);
+            } else {
+                $t = (string) preg_replace('/^---\s*\R+/', '', $t);
+                $t = (string) preg_replace('/\R---\s*$/', '', $t);
+            }
+        }
+
+        if (preg_match('/^<file\b[^>]*>\s*\R/i', $t)
+            && preg_match('/^<file\b[^>]*>\s*\R([\s\S]*?)\R<\/file>\s*$/i', $t, $m)) {
+            $t = trim($m[1]);
+        }
+
+        $t = (string) preg_replace('/^###\s+[^\n]+\n---\s*\R+/m', '', $t);
+
+        return trim($t);
+    }
+
     /**
      * @return array{summary:string, files:array<string, string>, notes:list<string>}
      */
@@ -43,7 +70,7 @@ final class AiResponseParser
             if (!is_string($path) || !is_string($content) || $path === '' || str_contains($path, '..')) {
                 continue;
             }
-            $files[$path] = $content;
+            $files[$path] = self::sanitizeLatex($content);
         }
         if ($files === []) {
             throw new RuntimeException('AI returned no file updates. The model may have refused or used an unexpected JSON shape.');
@@ -67,18 +94,18 @@ final class AiResponseParser
         if (is_array($data)) {
             foreach (['content', 'file', 'text', 'latex'] as $key) {
                 if (isset($data[$key]) && is_string($data[$key]) && $data[$key] !== '') {
-                    return $data[$key];
+                    return self::sanitizeLatex($data[$key]);
                 }
             }
             if (isset($data['files']) && is_array($data['files'])) {
                 foreach ($data['files'] as $content) {
                     if (is_string($content) && $content !== '') {
-                        return $content;
+                        return self::sanitizeLatex($content);
                     }
                 }
             }
         }
-        return $text;
+        return self::sanitizeLatex($text);
     }
 
     /** @return array<string, mixed> */
