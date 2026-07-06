@@ -100,7 +100,7 @@ Ask the human for anything missing before changing production config.
 
 Compiles: PHP decrypts → temp dir → `docker run --network=none … latexmk` → encrypt PDF → wipe plaintext.
 
-**Optional AI:** PHP proxies `POST /v1/chat/completions` to the configured provider (Ollama, OpenAI, Gemini, Grok, OpenRouter, etc.). See [docs/ai-providers.md](./docs/ai-providers.md). Agents must ask which provider — do not assume home Ollama. **AI features are alpha/experimental;** set expectations that model choice drives accuracy.
+**Optional AI:** PHP proxies chat completions to the configured provider (Ollama, OpenAI, Gemini, Grok, OpenRouter, etc.). The UI uses **`api/ai_stream.php`** (Server-Sent Events) for live progress during assist and fix-problems; **`api/ai_complete.php`** remains a buffered JSON fallback. See [docs/ai-providers.md](./docs/ai-providers.md). Agents must ask which provider — do not assume home Ollama. **AI features are alpha/experimental;** set expectations that model choice drives accuracy. **Ollama:** single-file streaming uses plain LaTeX (no `format: json`); multi-file and fix-problems keep JSON mode and show status/char counts only.
 
 ---
 
@@ -210,8 +210,10 @@ Verify on the host:
 php -v          # need 8.2+
 composer -V
 docker --version
-php -m | grep -E 'openssl|pdo_sqlite|json'
+php -m | grep -E 'openssl|pdo_sqlite|json|curl'
 ```
+
+The **curl** PHP extension is required for AI streaming (`api/ai_stream.php`). Install e.g. `php8.3-curl` if missing.
 
 **Hardware:** minimum 2 vCPU, 2 GB RAM, 40 GB disk (see [SPECS.md](./SPECS.md) §6.2). Warn the human if below recommended (4 GB RAM for production).
 
@@ -317,6 +319,8 @@ Use samples in [`config/`](./config/README.md):
 
 Replace `YOUR_HOST` and paths. Reload the web server after edits.
 
+**AI streaming:** if Nginx terminates PHP, ensure `fastcgi_read_timeout` is at least **`SIAMTEX_AI_TIMEOUT`** (default 120s) and disable buffering for `api/ai_stream.php` (included in the Nginx sample). Apache + mod_php/php-fpm usually streams without extra rules; very long AI jobs may need a higher proxy timeout.
+
 **Apache:** enable `AllowOverride FileInfo Options AuthConfig` so `.htaccess` rules apply (see sample vhost).
 
 **Subpath installs:** if the app lives at `/siamtex`, set `SIAMTEX_OAUTH_BASE_URL` accordingly; the app auto-detects base path from `SCRIPT_NAME` when env is unset, but OAuth requires the explicit base URL.
@@ -399,6 +403,8 @@ See [SPECS.md](./SPECS.md) §5 (security requirements) for product-level constra
 | `.htaccess` ignored | `AllowOverride None` | Update Apache Directory block per sample |
 | `README.md` or `docs/` browsable | Deny rules missing or not loaded | Install `config/htaccess.example`; reload web server; re-run exposure curls |
 | Screenshots accidentally in web root | Agent copied admin files into deploy path | Move to `docs/` or off-server; add deny rules; never commit private paths |
+| AI stream shows nothing until the end | Nginx/Apache buffering or `fastcgi_read_timeout` too low | Set `fastcgi_read_timeout` ≥ `SIAMTEX_AI_TIMEOUT` (default 120s); for Nginx add `fastcgi_buffering off` on `ai_stream.php` (see `config/nginx-siamtex.conf.example`); restart web server |
+| AI “curl extension required” | PHP curl not installed | `apt install php8.3-curl` (or your version); restart php-fpm |
 
 **Logs:** PHP-FPM journal, web server error log, compile output in the app’s build log panel.
 

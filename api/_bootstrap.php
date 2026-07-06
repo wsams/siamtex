@@ -2,9 +2,11 @@
 
 declare(strict_types=1);
 
-header('Content-Type: application/json; charset=utf-8');
-header('X-Content-Type-Options: nosniff');
-header('Cache-Control: no-store');
+if (!defined('STX_NO_JSON_HEADER')) {
+    header('Content-Type: application/json; charset=utf-8');
+    header('X-Content-Type-Options: nosniff');
+    header('Cache-Control: no-store');
+}
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
@@ -146,4 +148,47 @@ function stx_require_csrf(): void
     if (!stx_csrf_ok()) {
         stx_json(['error' => 'Missing CSRF header.'], 403);
     }
+}
+
+function stx_sse_begin(): void
+{
+    header('Content-Type: text/event-stream; charset=utf-8');
+    header('X-Content-Type-Options: nosniff');
+    header('Cache-Control: no-cache, no-store');
+    header('Connection: keep-alive');
+    header('X-Accel-Buffering: no');
+    while (ob_get_level() > 0) {
+        ob_end_flush();
+    }
+}
+
+function stx_sse_send(string $event, array $data): void
+{
+    echo 'event: ' . $event . "\n";
+    echo 'data: ' . json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE) . "\n\n";
+    if (function_exists('ob_flush')) {
+        @ob_flush();
+    }
+    flush();
+}
+
+function stx_client_aborted(): bool
+{
+    return function_exists('connection_aborted') && connection_aborted() !== 0;
+}
+
+function stx_sse_fail(Throwable $e): void
+{
+    if ($e instanceof JsonException) {
+        stx_sse_send('error', ['error' => 'Invalid JSON body.']);
+        return;
+    }
+    if ($e instanceof RuntimeException || $e instanceof InvalidArgumentException) {
+        stx_sse_send('error', ['error' => $e->getMessage()]);
+        return;
+    }
+    error_log('siamtex-ai-stream: ' . $e->__toString());
+    stx_sse_send('error', [
+        'error' => Config::debug() ? $e->getMessage() : 'Server error.',
+    ]);
 }

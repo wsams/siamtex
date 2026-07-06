@@ -87,6 +87,47 @@ final class AiResponseParser
         ];
     }
 
+    /**
+     * @return array{summary:string, name:string, mainFile:string, engine:string, files:array<string, string>, notes:list<string>}
+     */
+    public static function parseNewProjectJson(string $raw): array
+    {
+        $text = self::stripFences($raw);
+        $data = self::decodeJsonObject($text);
+        if ($data === null) {
+            throw new RuntimeException(
+                'AI response was not valid JSON. Try a shorter prompt or a different model.'
+            );
+        }
+        $parsed = self::parseMultiFileJson($raw);
+        $name = trim((string) ($data['name'] ?? $data['title'] ?? 'AI Project'));
+        if ($name === '') {
+            $name = 'AI Project';
+        }
+        $mainFile = trim((string) ($data['mainFile'] ?? $data['main_file'] ?? 'main.tex'));
+        if ($mainFile === '' || str_contains($mainFile, '..')) {
+            $mainFile = 'main.tex';
+        }
+        if (!isset($parsed['files'][$mainFile])) {
+            $keys = array_keys($parsed['files']);
+            if ($keys !== []) {
+                $mainFile = (string) $keys[0];
+            }
+        }
+        $engine = trim((string) ($data['engine'] ?? 'pdflatex'));
+        if (!in_array($engine, ['pdflatex', 'xelatex', 'lualatex'], true)) {
+            $engine = 'pdflatex';
+        }
+        return [
+            'summary' => $parsed['summary'],
+            'name' => $name,
+            'mainFile' => $mainFile,
+            'engine' => $engine,
+            'files' => $parsed['files'],
+            'notes' => $parsed['notes'],
+        ];
+    }
+
     public static function parseSingleFile(string $raw): string
     {
         $text = self::stripFences($raw);

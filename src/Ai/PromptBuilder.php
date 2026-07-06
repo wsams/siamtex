@@ -109,4 +109,39 @@ TXT;
             ['role' => 'user', 'content' => $user],
         ];
     }
+
+    public static function createProject(string $prompt, string $engine = 'pdflatex', string $nameHint = ''): array
+    {
+        $hint = $nameHint !== '' ? "\nSuggested project name: {$nameHint}" : '';
+        $user = <<<TXT
+Create a complete new LaTeX project from this description:
+
+{$prompt}
+{$hint}
+
+Respond with a single JSON object only (no markdown fences), shape:
+{
+  "name": "short project title",
+  "mainFile": "main.tex",
+  "engine": "{$engine}",
+  "summary": "what you created",
+  "files": {
+    "main.tex": "full file with \\\\documentclass, preamble, \\\\begin{document} ... \\\\end{document}",
+    "optional-partial.tex": "optional additional files"
+  },
+  "notes": ["optional warnings"]
+}
+
+Rules:
+- Include a compilable main.tex (or set mainFile to the correct entry point).
+- Use only .tex, .bib, .sty, .cls filenames — no images or binary assets.
+- For multi-file documents, split into logical partials (sections, bibliography, etc.).
+- Each file value must be complete source, not a diff.
+TXT;
+
+        return [
+            ['role' => 'system', 'content' => self::systemPrompt($engine) . "\nYou create new LaTeX projects. Output must be one JSON object matching the requested shape."],
+            ['role' => 'user', 'content' => $user],
+        ];
+    }
 }

@@ -307,6 +307,8 @@ sudo /var/www/html/siamtex/scripts/configure-ai-ollama.sh
 sudo systemctl restart php8.3-fpm
 ```
 
+**Streaming:** AI assist uses `api/ai_stream.php` (SSE). Ensure PHP **curl** is installed (`php8.3-curl`). On **Nginx**, use the sample vhost’s `ai_stream.php` location (`fastcgi_buffering off`, `fastcgi_read_timeout` ≥ `SIAMTEX_AI_TIMEOUT`, default 120s). Single-file edits stream live LaTeX; project-wide and fix-problems show status and character counts while Ollama returns JSON.
+
 ### Path B — Cloud provider (no Tailscale)
 
 1. Complete §§1–7.
@@ -322,7 +324,7 @@ sudo systemctl restart php8.3-fpm
 2. Create a project from the **homework** template
 3. Edit and **Compile** — PDF should update
 4. **History** — confirm version timeline after a save
-5. **AI** (if enabled) → Test connection → small instruction → Accept
+5. **AI** (if enabled) → Test connection → single-file instruction → confirm **live output** in the progress panel → Accept
 
 ---
 
@@ -350,6 +352,7 @@ sudo systemctl restart php8.3-fpm
 | Compile fails immediately | `usermod -aG docker www-data`; rebuild TeX image; restart php-fpm |
 | Env vars empty in app | PHP-FPM drop-in installed? `systemctl restart php8.3-fpm` after editing `/etc/siamtex.env` |
 | AI “could not reach provider” | Tailscale / API key / base URL — [docs/ai-providers.md](./docs/ai-providers.md) |
+| AI progress frozen until the end | Nginx buffering or short `fastcgi_read_timeout` | Apply `config/nginx-siamtex.conf.example` `ai_stream.php` block; timeout ≥ `SIAMTEX_AI_TIMEOUT`; restart nginx + php-fpm |
 | OAuth redirect mismatch | `SIAMTEX_OAUTH_BASE_URL` must match browser URL exactly |
 
 Logs: `journalctl -u php8.3-fpm`, `/var/log/apache2/siamtex-error.log`, in-app **Build log** panel.

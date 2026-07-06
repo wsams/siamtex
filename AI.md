@@ -227,32 +227,44 @@ Optional: daily cap configurable by admin env (`SIAMTEX_AI_MAX_CALLS_PER_DAY`).
 
 ## 9. Implementation sketch (PHP)
 
-Suggested modules (not built yet):
+Built modules:
 
 ```
 src/Ai/
-  AiConfig.php          # load/save encrypted user provider settings
-  AiClient.php          # dispatch to adapters
-  OpenAiCompatibleClient.php
-  AnthropicClient.php
-  PromptBuilder.php     # resume/update prompts
-  DocumentExtractor.php # txt/md/tex/docx
-  AiResponseParser.php  # JSON files map
+  AiConfig.php
+  AiService.php
+  OpenAiCompatibleClient.php   # buffered chat + SSE stream proxy (curl)
+  PromptBuilder.php
+  AiResponseParser.php
+  UrlGuard.php
 api/
-  ai_settings.php       # GET/PUT provider config (never echo full key after save—mask it)
-  ai_test.php           # connection test
-  ai_complete.php       # run assist job
+  ai_settings.php
+  ai_test.php                  # buffered connection test (unchanged for Ollama JSON ping)
+  ai_complete.php              # buffered JSON fallback
+  ai_stream.php                # SSE: token stream (single file) + status/progress (multi-file)
 ```
+
+**Streaming behavior (v1):**
+
+| Mode | Provider wire format | UI |
+|------|---------------------|-----|
+| Single-file assist | `stream: true`, plain LaTeX (Ollama **without** `format: json`) | Live token preview in progress dialog |
+| Whole project / fix problems | `stream: true` internally, Ollama keeps `format: json` | Status messages + received character count; full diff after `done` |
+| Test connection | `stream: false`, Ollama `format: json` | Short buffered ping |
+
+The browser reads `text/event-stream` events: `status`, `delta`, `progress`, `done`, `error`. Parsed results still go through `AiResponseParser` before Accept.
+
+**Web server:** disable reverse-proxy buffering for `ai_stream.php`; `fastcgi_read_timeout` ≥ `SIAMTEX_AI_TIMEOUT`. See `config/nginx-siamtex.conf.example`.
 
 UI:
 
 - Settings page for provider  
-- Project **AI** drawer: upload zone, goal presets, Run, diff viewer  
+- Project **AI** drawer: scope, instruction, Run with live progress, diff viewer, Accept  
 
 Dependencies (Composer examples):
 
 - `phpoffice/phpword` for `.docx` (or a minimal XML extract to avoid heavy deps)  
-- No official need for provider SDKs if you use plain `curl`/Guzzle (already available via OAuth stack)
+- PHP **curl** extension for streaming (not a Composer package)
 
 ---
 

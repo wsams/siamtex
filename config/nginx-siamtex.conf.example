@@ -39,6 +39,17 @@ server {
         fastcgi_read_timeout 120s;
     }
 
+    # AI streaming — disable buffering so SSE tokens reach the browser promptly.
+    # Matches /api/ai_stream.php (app at vhost root) or /siamtex/api/ai_stream.php (subpath).
+    # Raise fastcgi_read_timeout if SIAMTEX_AI_TIMEOUT is higher than 180.
+    location ~ /api/ai_stream\.php$ {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        fastcgi_buffering off;
+        fastcgi_read_timeout 180s;
+    }
+
     access_log /var/log/nginx/siamtex-access.log;
     error_log  /var/log/nginx/siamtex-error.log;
 }

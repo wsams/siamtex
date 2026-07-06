@@ -11,6 +11,7 @@
     oauthConfigured: false,
     aiEnabled: false,
     aiConfig: null,
+    aiUsage: null,
     projects: [],
     templates: [],
     commonFiles: [],
@@ -23,6 +24,8 @@
     problemsTab: 'problems',
     shareToken: null,
     editor: null,
+    editorTheme: localStorage.getItem('siamtex_editor_theme') || 'material-darker',
+    editorVim: localStorage.getItem('siamtex_editor_vim') === '1',
     autoTimer: null,
     compiling: false,
   };
@@ -85,16 +88,76 @@
     return m > 0 ? `${m}:${String(s).padStart(2, '0')}` : `${s}s`;
   }
 
+  function formatTokens(n) {
+    const v = Number(n) || 0;
+    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+    if (v >= 10_000) return `${Math.round(v / 1000)}k`;
+    if (v >= 1000) return `${(v / 1000).toFixed(1)}k`;
+    return String(v);
+  }
+
+  function formatTokenUsage(usage, opts = {}) {
+    if (!usage) return '0 tokens';
+    const total = Number(usage.totalTokens) || 0;
+    const est = usage.estimated ? '≈' : '';
+    const prefix = opts.short ? '' : 'AI: ';
+    if (opts.detailed) {
+      const inTok = Number(usage.promptTokens) || 0;
+      const outTok = Number(usage.completionTokens) || 0;
+      return `${prefix}${est}${formatTokens(total)} tokens (${formatTokens(inTok)} in / ${formatTokens(outTok)} out)`;
+    }
+    return `${prefix}${est}${formatTokens(total)} tokens`;
+  }
+
+  function applyAiUsageFromResponse(data) {
+    if (data?.usageTotals?.user) {
+      state.aiUsage = data.usageTotals.user;
+      renderGlobalAiUsage();
+    }
+    if (data?.usageTotals?.project && state.project) {
+      state.project.aiUsage = data.usageTotals.project;
+      renderProjectAiUsage();
+    }
+  }
+
+  function renderGlobalAiUsage() {
+    const el = document.getElementById('aiUsageGlobal');
+    if (!el || !state.aiEnabled) return;
+    const u = state.aiUsage;
+    if (!u || !u.totalTokens) {
+      el.classList.add('hidden');
+      return;
+    }
+    el.classList.remove('hidden');
+    el.textContent = `AI ${formatTokens(u.totalTokens)} tok`;
+    el.title = `Your account: ${formatTokens(u.promptTokens)} prompt + ${formatTokens(u.completionTokens)} completion tokens across ${u.callCount} call(s)`;
+  }
+
+  function renderProjectAiUsage() {
+    const el = document.getElementById('aiUsageProject');
+    if (!el || !state.project) return;
+    const u = state.project.aiUsage;
+    if (!u || !u.totalTokens) {
+      el.classList.add('hidden');
+      return;
+    }
+    el.classList.remove('hidden');
+    el.innerHTML = `<span class="ai-usage-label">AI tokens</span> <strong>${formatTokens(u.totalTokens)}</strong>
+      <span class="ai-usage-detail">${formatTokens(u.promptTokens)} in · ${formatTokens(u.completionTokens)} out · ${u.callCount} calls</span>`;
+    el.title = 'Cumulative AI token usage for this project (cloud providers may bill per token)';
+  }
+
   let aiWaitGlobal = null;
 
   /**
-   * Progress UI for long-running AI calls (elapsed time, timeout countdown, cancel).
+   * Progress UI for long-running AI calls (elapsed time, timeout countdown, cancel, optional stream preview).
    * @param {HTMLElement} mount
-   * @param {{ title?: string, subtitle?: string, phases?: string[] }} opts
+   * @param {{ title?: string, subtitle?: string, phases?: string[], streaming?: boolean }} opts
    */
   function createAiWait(mount, opts = {}) {
     const timeout = aiTimeoutSeconds();
     const model = state.aiConfig?.model || 'AI model';
+    const streaming = !!opts.streaming;
     const phases = opts.phases || [
       `Connecting to ${model}…`,
       'Sending your LaTeX context over the network…',
@@ -103,7 +166,9 @@
       'Approaching the server time limit — cancel to retry with a smaller scope…',
     ];
     const title = opts.title || 'AI is working';
-    const subtitle = opts.subtitle || 'Responses are not streamed yet; this bar tracks elapsed time and the server timeout.';
+    const subtitle = opts.subtitle || (streaming
+      ? 'Live output from the model appears below as tokens arrive.'
+      : 'Status updates appear while the model works.');
 
     mount.classList.remove('hidden');
     mount.innerHTML = `
@@ -121,7 +186,9 @@
           <span>Elapsed <strong class="ai-wait-elapsed">0s</strong></span>
           <span>Limit <strong>${esc(formatAiDuration(timeout))}</strong></span>
           <span class="ai-wait-remain-wrap">Remaining <strong class="ai-wait-remain">${esc(formatAiDuration(timeout))}</strong></span>
+          <span class="ai-wait-tokens hidden">Tokens <strong class="ai-wait-token-count">0</strong> <span class="ai-wait-token-detail"></span></span>
         </div>
+        <pre class="ai-wait-stream hidden" aria-label="Model output preview"></pre>
         <button type="button" class="ghost ai-wait-cancel">Cancel request</button>
       </div>`;
 
@@ -132,10 +199,45 @@
     const barFill = mount.querySelector('.ai-wait-bar-fill');
     const bar = mount.querySelector('.ai-wait-bar');
     const cancelBtn = mount.querySelector('.ai-wait-cancel');
+    const streamEl = mount.querySelector('.ai-wait-stream');
+    const tokensWrap = mount.querySelector('.ai-wait-tokens');
+    const tokenCountEl = mount.querySelector('.ai-wait-token-count');
+    const tokenDetailEl = mount.querySelector('.ai-wait-token-detail');
     const ac = new AbortController();
     let tick = null;
     let startedAt = 0;
     let cancelled = false;
+    let tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, estimated: true };
+    let manualPhase = false;
+
+    if (streaming) {
+      streamEl.classList.remove('hidden');
+    }
+    tokensWrap.classList.remove('hidden');
+
+    const syncTokenDisplay = () => {
+      const est = tokenUsage.estimated ? '≈' : '';
+      tokenCountEl.textContent = `${est}${formatTokens(tokenUsage.totalTokens)}`;
+      tokenDetailEl.textContent = tokenUsage.promptTokens || tokenUsage.completionTokens
+        ? `(${formatTokens(tokenUsage.promptTokens)} in / ${formatTokens(tokenUsage.completionTokens)} out)`
+        : '';
+    };
+
+    const applyTokenUsage = (usage) => {
+      if (!usage) return;
+      tokenUsage = {
+        promptTokens: Number(usage.promptTokens) || 0,
+        completionTokens: Number(usage.completionTokens) || 0,
+        totalTokens: Number(usage.totalTokens) || (Number(usage.promptTokens) || 0) + (Number(usage.completionTokens) || 0),
+        estimated: !!usage.estimated,
+      };
+      syncTokenDisplay();
+      manualPhase = true;
+      const label = `Receiving… ${formatTokenUsage(tokenUsage, { short: true })}`;
+      phaseEl.textContent = label;
+      const gPhase = aiWaitGlobal?.querySelector('.ai-global-phase');
+      if (gPhase) gPhase.textContent = label;
+    };
 
     const phaseFor = (sec) => {
       if (sec < 6) return phases[0];
@@ -150,13 +252,39 @@
       const gPhase = aiWaitGlobal.querySelector('.ai-global-phase');
       const gElapsed = aiWaitGlobal.querySelector('.ai-global-elapsed');
       const gRemain = aiWaitGlobal.querySelector('.ai-global-remain');
-      if (gPhase) gPhase.textContent = phaseFor(sec);
+      if (gPhase && !manualPhase) gPhase.textContent = phaseFor(sec);
       if (gElapsed) gElapsed.textContent = formatAiDuration(sec);
       if (gRemain) gRemain.textContent = formatAiDuration(remain);
     };
 
     return {
       signal: ac.signal,
+      setPhase(message) {
+        manualPhase = true;
+        if (phaseEl) phaseEl.textContent = message;
+        const gPhase = aiWaitGlobal?.querySelector('.ai-global-phase');
+        if (gPhase) gPhase.textContent = message;
+      },
+      appendStream(text) {
+        if (!text || !streamEl) return;
+        streamEl.textContent += text;
+        streamEl.scrollTop = streamEl.scrollHeight;
+        if (tokenUsage.estimated) {
+          const estOut = Math.max(tokenUsage.completionTokens, Math.ceil(streamEl.textContent.length / 4));
+          applyTokenUsage({
+            promptTokens: tokenUsage.promptTokens,
+            completionTokens: estOut,
+            totalTokens: tokenUsage.promptTokens + estOut,
+            estimated: true,
+          });
+        }
+      },
+      setTokenUsage(usage) {
+        applyTokenUsage(usage);
+      },
+      setProgress() {
+        /* legacy SSE char progress — tokens preferred */
+      },
       start() {
         startedAt = Date.now();
         document.body.classList.add('ai-busy');
@@ -179,7 +307,7 @@
           const remain = Math.max(0, timeout - sec);
           elapsedEl.textContent = formatAiDuration(sec);
           remainEl.textContent = formatAiDuration(remain);
-          phaseEl.textContent = phaseFor(sec);
+          if (!manualPhase) phaseEl.textContent = phaseFor(sec);
           const pct = Math.min(100, (sec / timeout) * 100);
           barFill.style.width = `${pct}%`;
           bar.classList.toggle('ai-warn', pct >= 70 && pct < 92);
@@ -235,6 +363,82 @@
       const result = await api(path, { method: 'POST', json, signal: wait.signal });
       wait.finish();
       return result;
+    } catch (e) {
+      if (wait.wasCancelled() || e.name === 'AbortError') {
+        wait.finish();
+        throw new Error('AI request cancelled.');
+      }
+      let msg = String(e.message || e);
+      if (/timeout|timed out|could not reach|empty response/i.test(msg)) {
+        msg = `${msg} (limit ${formatAiDuration(aiTimeoutSeconds())} — try a smaller file or increase SIAMTEX_AI_TIMEOUT)`;
+      }
+      wait.fail(msg);
+      throw new Error(msg);
+    } finally {
+      buttons.forEach((b) => { if (b) b.disabled = false; });
+    }
+  }
+
+  function parseSseBlock(block, wait, onDone) {
+    let event = 'message';
+    let data = '';
+    block.split('\n').forEach((line) => {
+      if (line.startsWith('event: ')) event = line.slice(7).trim();
+      else if (line.startsWith('data: ')) data = line.slice(6);
+    });
+    if (!data) return;
+    const payload = JSON.parse(data);
+    if (event === 'delta') wait.appendStream(payload.text || '');
+    else if (event === 'status') wait.setPhase(payload.message || 'Working…');
+    else if (event === 'progress' && payload.usage) wait.setTokenUsage(payload.usage);
+    else if (event === 'done') onDone(payload);
+    else if (event === 'error') throw new Error(payload.error || 'AI error');
+  }
+
+  async function runAiStreamRequest(path, json, wait, buttons = []) {
+    buttons.forEach((b) => { if (b) b.disabled = true; });
+    wait.onCancel(() => wait.cancel());
+    wait.start();
+    let finalData = null;
+    try {
+      const res = await fetch(BASE + path, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-SiamTeX-CSRF': '1' },
+        body: JSON.stringify(json),
+        signal: wait.signal,
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (!res.ok) {
+        if (ct.includes('application/json')) {
+          const err = await res.json();
+          throw new Error(err.error || res.statusText);
+        }
+        throw new Error((await res.text()) || res.statusText);
+      }
+      if (!res.body || !ct.includes('text/event-stream')) {
+        throw new Error('AI stream unavailable — server did not return event-stream.');
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const chunk = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          parseSseBlock(chunk, wait, (payload) => { finalData = payload; });
+        }
+      }
+      if (buffer.trim()) {
+        parseSseBlock(buffer.trim(), wait, (payload) => { finalData = payload; });
+      }
+      wait.finish();
+      if (!finalData) throw new Error('AI stream ended without a result.');
+      return finalData;
     } catch (e) {
       if (wait.wasCancelled() || e.name === 'AbortError') {
         wait.finish();
@@ -513,8 +717,10 @@
       ? `<img src="${esc(u.avatarUrl)}" alt="">`
       : `<span class="logo" style="width:28px;height:28px;font-size:.9rem">∫</span>`;
     $top().innerHTML = `
+      <span id="aiUsageGlobal" class="pill ai-usage-global hidden" title="Total AI tokens used on this account"></span>
       <div class="user-chip">${avatar}<span>${esc(u.name || u.login || 'User')}</span></div>
       ${state.oauthConfigured ? `<button type="button" id="btnLogout" class="ghost">Sign out</button>` : ''}`;
+    renderGlobalAiUsage();
     document.getElementById('btnLogout')?.addEventListener('click', async () => {
       await api('/api/auth_logout.php', { method: 'POST', json: {} });
       location.href = BASE + '/';
@@ -533,19 +739,37 @@
   }
 
   function renderDashboard() {
-    const projects = state.projects.map((p) => `
+    const projects = state.projects.map((p) => {
+      const usage = p.aiUsage?.totalTokens ? `<span class="pill ai-usage-pill" title="AI tokens used on this project">${formatTokens(p.aiUsage.totalTokens)} tok</span>` : '';
+      return `
       <article class="card clickable" data-open="${esc(p.id)}">
         <h3>${esc(p.name)}</h3>
         <p>${esc(p.mainFile)} · ${esc(p.engine)}</p>
         <div class="meta">
           <span class="pill">${esc(p.role || 'owner')}</span>
           ${p.hasPdf ? '<span class="pill">PDF ready</span>' : ''}
+          ${usage}
         </div>
         <div class="card-actions">
           <button type="button" data-open="${esc(p.id)}" class="primary">Open</button>
           <button type="button" data-del="${esc(p.id)}" class="danger">Delete</button>
         </div>
-      </article>`).join('');
+      </article>`;
+    }).join('');
+
+    const aiHero = state.aiEnabled ? `
+        <article class="card ai-new-project-card">
+          <div class="ai-new-project-glow" aria-hidden="true"></div>
+          <div class="ai-new-project-inner">
+            <div class="ai-new-project-icon" aria-hidden="true">✦</div>
+            <div>
+              <h3>New project with AI</h3>
+              <p>Describe a document — homework, article, resume, slides — and SiamTeX will generate a multi-file LaTeX project.</p>
+              ${state.aiUsage?.totalTokens ? `<p class="ai-usage-note">Account total: <strong>${formatTokens(state.aiUsage.totalTokens)}</strong> tokens across ${state.aiUsage.callCount} AI call(s)</p>` : ''}
+            </div>
+            <button type="button" id="btnAiNewProject" class="primary ai-sparkle-btn">✦ Create with AI</button>
+          </div>
+        </article>` : '';
 
     const templates = state.templates.map((t) => `
       <article class="card">
@@ -576,7 +800,8 @@
             </label>
           </div>
         </div>
-        <div class="grid">${projects || '<p class="pill">No projects yet — create one from a template.</p>'}</div>
+        <div class="grid dash-feature-grid">${aiHero}${projects || ''}</div>
+        ${!projects && !aiHero ? '<p class="pill">No projects yet — create one from a template or with AI.</p>' : ''}
         <div class="templates">
           <h2>Templates</h2>
           <div class="grid">${templates}</div>
@@ -602,6 +827,7 @@
       el.addEventListener('click', () => showNewModal(el.getAttribute('data-tpl')));
     });
     document.getElementById('btnNew').onclick = () => showNewModal('blank');
+    document.getElementById('btnAiNewProject')?.addEventListener('click', showAiNewProject);
     document.getElementById('importFile').onchange = async (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -664,6 +890,103 @@
     };
   }
 
+  function showAiNewProject() {
+    if (!state.aiEnabled) {
+      toast('AI is not configured on this server', 'error');
+      return;
+    }
+    const cfg = state.aiConfig || {};
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal modal-wide ai-create-modal">
+        <div class="ai-create-head">
+          <span class="ai-new-project-icon" aria-hidden="true">✦</span>
+          <div>
+            <h2>Create project with AI</h2>
+            <p class="ai-disclaimer"><strong>Alpha / experimental.</strong> The model will generate one or more LaTeX files from your description. Review the project before sharing or submitting.</p>
+          </div>
+        </div>
+        <p class="pill">${esc(cfg.model || 'model')} @ ${esc(cfg.baseUrl || 'provider')}</p>
+        <label>Project name (optional)</label>
+        <input id="aiNewName" type="text" placeholder="e.g. Physics homework 3" />
+        <label>What should this project contain?</label>
+        <textarea id="aiNewPrompt" rows="6" placeholder="e.g. A two-page homework write-up about the heat equation with sections for introduction, derivation, and conclusion. Include main.tex and a bibliography file."></textarea>
+        <label>Engine</label>
+        <select id="aiNewEngine">
+          <option value="pdflatex">pdflatex (recommended)</option>
+          <option value="xelatex">xelatex</option>
+          <option value="lualatex">lualatex</option>
+        </select>
+        <div id="aiNewWaitMount" class="ai-wait-mount hidden"></div>
+        <div id="aiNewPreview" class="ai-preview hidden"></div>
+        <div class="modal-actions">
+          <button type="button" id="aiNewRun" class="primary ai-sparkle-btn">✦ Generate project</button>
+          <button type="button" id="aiNewOpen" class="primary hidden">Open project</button>
+          <button type="button" id="aiNewClose">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(backdrop);
+    let created = null;
+    const waitMount = backdrop.querySelector('#aiNewWaitMount');
+    const runBtn = backdrop.querySelector('#aiNewRun');
+    const openBtn = backdrop.querySelector('#aiNewOpen');
+    const closeBtn = backdrop.querySelector('#aiNewClose');
+
+    runBtn.onclick = async () => {
+      const prompt = backdrop.querySelector('#aiNewPrompt').value.trim();
+      if (!prompt) {
+        toast('Describe the project you want', 'error');
+        return;
+      }
+      const wait = createAiWait(waitMount, {
+        title: 'AI is creating your project',
+        streaming: false,
+        subtitle: 'Token usage updates below — cloud providers may bill per token.',
+        phases: [
+          'Sending your prompt to the model…',
+          'Planning document structure and files…',
+          'Generating LaTeX sources — multi-file projects take longer…',
+          'Still writing — local Ollama models can be slow…',
+          'Approaching timeout — try a shorter prompt…',
+        ],
+      });
+      runBtn.disabled = true;
+      closeBtn.disabled = true;
+      try {
+        const data = await runAiStreamRequest('/api/ai_stream.php', {
+          mode: 'create_project',
+          prompt,
+          name: backdrop.querySelector('#aiNewName').value.trim(),
+          engine: backdrop.querySelector('#aiNewEngine').value,
+        }, wait, [runBtn, openBtn, closeBtn]);
+        created = data.project;
+        applyAiUsageFromResponse(data);
+        const prev = backdrop.querySelector('#aiNewPreview');
+        prev.classList.remove('hidden');
+        const names = Object.keys(data.result?.files || {}).join(', ');
+        prev.innerHTML = `<h3>${esc(data.result?.summary || 'Project created')}</h3>
+          <p>Files: ${esc(names)}</p>
+          <p class="ai-usage-note">This request: ${esc(formatTokenUsage(data.usage, { detailed: true }))}</p>`;
+        openBtn.classList.remove('hidden');
+        runBtn.classList.add('hidden');
+        toast(`Project ready — ${formatTokenUsage(data.usage)}`, 'ok');
+      } catch (e) {
+        toast(e.message, e.message.includes('cancelled') ? '' : 'error');
+      } finally {
+        runBtn.disabled = false;
+        closeBtn.disabled = false;
+      }
+    };
+
+    openBtn.onclick = async () => {
+      if (!created?.id) return;
+      backdrop.remove();
+      await openProject(created.id);
+    };
+    closeBtn.onclick = () => backdrop.remove();
+  }
+
   async function loadDashboard() {
     const [proj, tpl] = await Promise.all([
       api('/api/projects.php'),
@@ -677,6 +1000,112 @@
 
   /* ---------- Workspace / editor ---------- */
 
+  const EDITOR_THEMES = [
+    { id: 'default', label: 'Light', hostBg: '#ffffff' },
+    { id: 'eclipse', label: 'Light (soft)', hostBg: '#ffffff' },
+    { id: 'material-darker', label: 'Dark', hostBg: '#212121' },
+    { id: 'dracula', label: 'Dark (vivid)', hostBg: '#282a36' },
+    { id: 'siamtex-low', label: 'Dark (low contrast)', hostBg: '#1c1c22' },
+  ];
+
+  function editorThemeMeta(id) {
+    return EDITOR_THEMES.find((t) => t.id === id) || EDITOR_THEMES[2];
+  }
+
+  function editorPrefsHtml() {
+    const opts = EDITOR_THEMES.map((t) => (
+      `<option value="${esc(t.id)}">${esc(t.label)}</option>`
+    )).join('');
+    return `
+      <div class="editor-prefs">
+        <label class="editor-pref" title="Editor color theme">
+          <span class="editor-pref-label">Theme</span>
+          <select id="editorTheme">${opts}</select>
+        </label>
+        <label class="editor-pref editor-pref-vim" title="Vim keybindings — press Esc for normal mode, i to insert">
+          <input type="checkbox" id="editorVim" />
+          <span>Vim</span>
+        </label>
+      </div>`;
+  }
+
+  function applyEditorTheme() {
+    const meta = editorThemeMeta(state.editorTheme);
+    const host = document.getElementById('editorHost');
+    if (host) {
+      host.setAttribute('data-editor-theme', state.editorTheme);
+      host.style.background = meta.hostBg;
+    }
+    if (state.editor?.setOption) {
+      state.editor.setOption('theme', state.editorTheme);
+      state.editor.refresh?.();
+    }
+    const fallback = document.getElementById('editorFallback');
+    if (fallback) {
+      fallback.className = `editor-fallback editor-fallback-${state.editorTheme}`;
+    }
+  }
+
+  function applyEditorVim() {
+    if (!state.editor?.setOption) return;
+    if (typeof CodeMirror === 'undefined' || !CodeMirror.keyMap?.vim) {
+      if (state.editorVim) {
+        toast('Vim mode could not load — check your network or hard-refresh', 'error');
+      }
+      state.editorVim = false;
+      localStorage.setItem('siamtex_editor_vim', '0');
+      const chk = document.getElementById('editorVim');
+      if (chk) chk.checked = false;
+      return;
+    }
+    if (state.editorVim) {
+      state.editor.setOption('keyMap', 'vim');
+    } else {
+      state.editor.setOption('keyMap', 'default');
+      state.editor.setOption('extraKeys', editorExtraKeys());
+    }
+    state.editor.focus?.();
+  }
+
+  function wireEditorPrefs() {
+    const themeSel = document.getElementById('editorTheme');
+    const vimChk = document.getElementById('editorVim');
+    if (!themeSel || !vimChk) return;
+    if (!EDITOR_THEMES.some((t) => t.id === state.editorTheme)) {
+      state.editorTheme = 'material-darker';
+    }
+    themeSel.value = state.editorTheme;
+    vimChk.checked = state.editorVim;
+    themeSel.onchange = () => {
+      state.editorTheme = themeSel.value;
+      localStorage.setItem('siamtex_editor_theme', state.editorTheme);
+      applyEditorTheme();
+    };
+    vimChk.onchange = () => {
+      state.editorVim = vimChk.checked;
+      localStorage.setItem('siamtex_editor_vim', state.editorVim ? '1' : '0');
+      applyEditorVim();
+    };
+    applyEditorTheme();
+    applyEditorVim();
+  }
+
+  function editorExtraKeys() {
+    return {
+      'Ctrl-S': () => { saveActive(); return false; },
+      'Cmd-S': () => { saveActive(); return false; },
+      'Ctrl-Enter': () => { compileNow(); return false; },
+      'Cmd-Enter': () => { compileNow(); return false; },
+    };
+  }
+
+  function initVimExCommands() {
+    if (typeof CodeMirror === 'undefined' || !CodeMirror.Vim?.defineEx) return;
+    if (initVimExCommands.done) return;
+    initVimExCommands.done = true;
+    CodeMirror.Vim.defineEx('write', 'w', () => { saveActive(); });
+  }
+
   async function openProject(id, shareToken = null) {
     try {
       state.shareToken = shareToken;
@@ -687,6 +1116,7 @@
       state.project = data.project;
       state.files = data.files || [];
       state.build = data.build;
+      if (data.aiUsage) state.project.aiUsage = data.aiUsage;
       state.contents = {};
       state.dirty = {};
       state.activePath = state.project.mainFile || 'main.tex';
@@ -724,6 +1154,9 @@
     if (typeof CodeMirror === 'undefined') {
       host.innerHTML = '<textarea id="editorFallback" class="editor-fallback"></textarea>';
       const ta = document.getElementById('editorFallback');
+      ta.className = `editor-fallback editor-fallback-${state.editorTheme}`;
+      host.setAttribute('data-editor-theme', state.editorTheme);
+      host.style.background = editorThemeMeta(state.editorTheme).hostBg;
       ta.value = text || '';
       ta.readOnly = !!readOnly;
       ta.addEventListener('input', () => {
@@ -767,7 +1200,7 @@
 
     state.editor = CodeMirror.fromTextArea(ta, {
       mode: 'stex',
-      theme: 'material-darker',
+      theme: state.editorTheme,
       lineNumbers: true,
       lineWrapping: true,
       matchBrackets: true,
@@ -776,13 +1209,13 @@
       indentUnit: 2,
       tabSize: 2,
       readOnly: !!readOnly,
-      extraKeys: {
-        'Ctrl-S': () => { saveActive(); return false; },
-        'Cmd-S': () => { saveActive(); return false; },
-        'Ctrl-Enter': () => { compileNow(); return false; },
-        'Cmd-Enter': () => { compileNow(); return false; },
-      },
+      keyMap: state.editorVim && CodeMirror.keyMap?.vim ? 'vim' : 'default',
+      extraKeys: editorExtraKeys(),
     });
+
+    initVimExCommands();
+    applyEditorTheme();
+    applyEditorVim();
 
     state.editor.on('change', () => {
       markDirtyFromEditor();
@@ -816,6 +1249,7 @@
           <button type="button" id="btnTools">Tools</button>
           ${canEdit ? '<button type="button" id="btnAi">AI</button>' : ''}
           <button type="button" id="btnHistory" title="Version history">History</button>
+          <span id="aiUsageProject" class="pill ai-usage-project hidden" title="AI token usage for this project"></span>
         </div>
         ${toolbarHtml(canEdit)}
         <aside class="files">
@@ -826,8 +1260,11 @@
           </div>` : ''}
         </aside>
         <section class="editor-pane">
-          <div class="pane-label" id="editorLabel">Editor — click here and type, or use the Insert menus above</div>
-          <div id="editorHost"></div>
+          <div class="pane-label editor-bar">
+            <span id="editorLabel" class="editor-bar-title">Editor — click here and type, or use the Insert menus above</span>
+            ${editorPrefsHtml()}
+          </div>
+          <div id="editorHost" data-editor-theme="${esc(state.editorTheme)}"></div>
         </section>
         <section class="preview-pane">
           <div class="pane-label">PDF preview</div>
@@ -880,10 +1317,13 @@
     });
 
     bindToolbar();
+    wireEditorPrefs();
+    renderProjectAiUsage();
     renderFileList();
     renderProblems();
     updateStatusDot();
     createEditor('', !canEdit);
+    wireEditorPrefs();
   }
 
   function isBinaryFile(f) {
@@ -1030,6 +1470,7 @@
       state.editor.focus?.();
     } else {
       createEditor(text, !canEditProject(state.project));
+      wireEditorPrefs();
     }
     renderFileList();
   }
@@ -1621,9 +2062,10 @@
       };
       const wait = createAiWait(waitMount, {
         title: scope === 'project' ? 'AI editing project' : `AI editing ${path}`,
+        streaming: scope === 'file',
         subtitle: scope === 'project'
-          ? 'Sending all .tex / .bib sources — larger projects take longer.'
-          : 'Sending the current file and your instruction.',
+          ? 'Multi-file edits use JSON mode — token counts update while the model works.'
+          : 'Live LaTeX output appears below; token usage updates as the model responds.',
         phases: scope === 'project' ? [
           `Collecting project files for ${modelLabel()}…`,
           'Uploading context to the model…',
@@ -1640,8 +2082,9 @@
       });
       runBtn.textContent = 'Running…';
       try {
-        const data = await runAiRequest('/api/ai_complete.php', payload, wait, [runBtn, testBtn, closeBtn, acceptBtn]);
-        pending = data;
+        const data = await runAiStreamRequest('/api/ai_stream.php', payload, wait, [runBtn, testBtn, closeBtn, acceptBtn]);
+        pending = { mode: data.mode, result: data.result };
+        applyAiUsageFromResponse(data);
         const prev = backdrop.querySelector('#aiPreview');
         prev.classList.remove('hidden');
         if (data.mode === 'file') {
@@ -1659,7 +2102,7 @@
           }
           acceptBtn.classList.remove('hidden');
         }
-        toast('AI suggestion ready — review and Accept', 'ok');
+        toast(`AI suggestion ready — ${formatTokenUsage(data.usage)} — review and Accept`, 'ok');
       } catch (e) {
         toast(e.message, e.message.includes('cancelled') ? '' : 'error');
       } finally {
@@ -1750,7 +2193,8 @@
     backdrop.querySelector('#aiFixRun').onclick = async () => {
       const wait = createAiWait(waitMount, {
         title: 'AI fixing compile errors',
-        subtitle: `Analyzing ${errors.length} error(s) in ${errFiles.length} file(s). AI is experimental — results depend on your model.`,
+        streaming: false,
+        subtitle: 'Token usage updates while the model generates JSON fix suggestions.',
         phases: [
           'Gathering errors and affected source files from the last build…',
           `Sending context to ${state.aiConfig?.model || 'the model'}…`,
@@ -1761,17 +2205,19 @@
       });
       runBtn.textContent = 'Analyzing…';
       try {
-        const data = await runAiRequest(
-          '/api/ai_complete.php',
+        const data = await runAiStreamRequest(
+          '/api/ai_stream.php',
           { projectId: state.project.id, mode: 'fix_problems' },
           wait,
           [runBtn, acceptBtn, closeBtn],
         );
-        pending = data;
+        pending = { mode: data.mode, result: data.result };
+        applyAiUsageFromResponse(data);
         const prev = backdrop.querySelector('#aiFixPreview');
         prev.classList.remove('hidden');
         const names = Object.keys(data.result.files || {}).join(', ');
-        prev.innerHTML = `<h3>${esc(data.result.summary)}</h3><p>Files to update: ${esc(names)}</p>`;
+        prev.innerHTML = `<h3>${esc(data.result.summary)}</h3><p>Files to update: ${esc(names)}</p>
+          <p class="ai-usage-note">${esc(formatTokenUsage(data.usage, { detailed: true }))}</p>`;
         if ((data.result.notes || []).length) {
           prev.innerHTML += `<p>${esc(data.result.notes.join(' '))}</p>`;
         }
@@ -1779,7 +2225,7 @@
           prev.innerHTML += `<h4>${esc(fp)}</h4><pre>${esc(String(body).slice(0, 4000))}</pre>`;
         }
         acceptBtn.classList.remove('hidden');
-        toast('Fix suggested — review and Accept', 'ok');
+        toast(`Fix suggested — ${formatTokenUsage(data.usage)} — review and Accept`, 'ok');
       } catch (e) {
         toast(e.message, e.message.includes('cancelled') ? '' : 'error');
       } finally {
@@ -2051,6 +2497,7 @@
       state.oauthConfigured = me.oauthConfigured;
       state.aiEnabled = !!me.aiEnabled;
       state.aiConfig = me.aiConfig || null;
+      state.aiUsage = me.aiUsage || null;
       renderTop();
 
       if (!state.user && state.authRequired) {

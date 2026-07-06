@@ -9,7 +9,18 @@ try {
     $method = $_SERVER['REQUEST_METHOD'];
 
     if ($method === 'GET') {
-        stx_json(['projects' => stx_projects()->listProjects($user)]);
+        $projects = stx_projects()->listProjects($user);
+        $usageMap = stx_ai()->usageByProjectForUser((int) $user['id']);
+        foreach ($projects as &$project) {
+            $project['aiUsage'] = $usageMap[$project['id']] ?? [
+                'promptTokens' => 0,
+                'completionTokens' => 0,
+                'totalTokens' => 0,
+                'callCount' => 0,
+            ];
+        }
+        unset($project);
+        stx_json(['projects' => $projects]);
     }
 
     stx_require_csrf();

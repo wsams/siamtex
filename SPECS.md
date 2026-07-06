@@ -137,6 +137,14 @@ Rebuild SiamTeX as a beautiful, responsive, security-first LaTeX IDE in the brow
 | F-93 | Follow accessibility best practices (keyboard navigation, contrast, labels, focus management). |
 | F-94 | On-screen hints should explain that users can type freely **or** use toolbar buttons; no LaTeX knowledge required to start. |
 
+### 3.11 Optional AI assist (alpha)
+
+| ID | Requirement |
+|----|-------------|
+| F-95 | Optional **BYOK / server-configured AI** for single-file edits, multi-file project edits, and compile-error fixes. Users must **review and accept** changes before they are written to the project. |
+| F-96 | Long-running AI jobs should show **live progress**: token streaming for single-file LaTeX edits; status messages and character counts for multi-file JSON responses (project edit, fix problems). |
+| F-97 | AI traffic is proxied server-side (`api/ai_stream.php` SSE); the browser never calls the provider directly. Connection tests may use a short buffered request (`api/ai_test.php`). |
+
 ---
 
 ## 4. Security & Privacy Requirements
@@ -191,6 +199,7 @@ These are recommended defaults; adjust during implementation as needed.
 | Metadata DB | SQLite (`data/siamtex.sqlite`, gitignored) for users, projects, memberships, builds |
 | PDF preview | PDF.js in a side pane |
 | Real-time compile | Debounced save → job queue → worker → encrypted artifact → preview refresh (WebSocket or SSE optional) |
+| Optional AI streaming | `api/ai_stream.php` (SSE proxy to provider); requires PHP **curl** extension; web server must not buffer long responses |
 | Storage | Local encrypted disk first; abstract the blob layer so S3-compatible storage can be added later |
 | Compile | **Dockerized TeX worker** (see §6.1), no outbound network, timeouts and ulimits |
 | Templates catalog | First-party curated templates only in v1 (resume, homework, article) |

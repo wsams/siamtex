@@ -22,6 +22,7 @@ try {
     } elseif ($aiEnabled) {
         $aiConfig = AiConfig::fromEnv()->publicView();
     }
+    $aiUsage = $user !== null ? stx_ai()->usageSummaryForUser((int) $user['id']) : null;
     stx_json([
         'user' => stx_public_user($user),
         'authRequired' => Config::authRequired(),
@@ -29,6 +30,7 @@ try {
         'oauthConfigured' => Config::githubClientId() !== '' && Config::githubClientSecret() !== '',
         'aiEnabled' => $aiEnabled,
         'aiConfig' => $aiConfig,
+        'aiUsage' => $aiUsage,
     ]);
 } catch (Throwable $e) {
     stx_http_error($e);

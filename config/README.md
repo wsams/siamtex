@@ -17,8 +17,9 @@ These files are **templates only**. Copy them to your server and edit paths, hos
    ```
 
 5. **Composer** — from the app root: `composer install --no-dev --optimize-autoloader`
-6. **Permissions** — `data/` must be writable by the PHP-FPM user and must **not** be web-accessible.
-7. **Apache `.htaccess`** (optional defense in depth):
+6. **PHP curl** — required for AI streaming: `php -m | grep curl` (install `php8.3-curl` if missing)
+7. **Permissions** — `data/` must be writable by the PHP-FPM user and must **not** be web-accessible.
+8. **Apache `.htaccess`** (optional defense in depth):
 
    ```bash
    cp config/htaccess.example .htaccess
@@ -33,7 +34,7 @@ These files are **templates only**. Copy them to your server and edit paths, hos
 | `siamtex.env.example` | OAuth, encryption keys, Docker image name |
 | `htaccess.example` | Copy to `.htaccess` in the web root |
 | `apache-siamtex.conf.example` | Virtual host, deny sensitive paths |
-| `nginx-siamtex.conf.example` | Server block for PHP-FPM |
+| `nginx-siamtex.conf.example` | Server block for PHP-FPM; includes `ai_stream.php` SSE tuning (`fastcgi_buffering off`) |
 | `php-fpm-siamtex.conf.example` | systemd drop-in to load `/etc/siamtex.env` |
 | `php-uploads-siamtex.ini.example` | PHP-FPM `upload_max_filesize` / `post_max_size` (≥ app 5 MB limit) |
 

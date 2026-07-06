@@ -124,6 +124,27 @@ SQL);
         return $this->publicProject($this->getProject($id) + ['_role' => 'owner']);
     }
 
+    /**
+     * @param array<string, string> $files
+     */
+    public function createFromAiFiles(array $user, string $name, string $mainFile, string $engine, array $files): array
+    {
+        $project = $this->create($user, $name, 'blank', $engine);
+        $id = (string) $project['id'];
+        $mainFile = $this->safePath($mainFile);
+        if ($mainFile !== (string) $project['mainFile'] || $engine !== (string) $project['engine']) {
+            $project = $this->updateMeta($user, $id, [
+                'mainFile' => $mainFile,
+                'engine' => $engine,
+                'name' => $name,
+            ]);
+        }
+        foreach ($files as $path => $content) {
+            $this->writeFile($user, $id, $this->safePath((string) $path), (string) $content, 'ai');
+        }
+        return $project;
+    }
+
     public function updateMeta(array $user, string $projectId, array $patch): array
     {
         $p = $this->requireRole($user, $projectId, ['owner', 'edit']);

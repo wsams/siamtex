@@ -24,6 +24,7 @@ try {
                 'project' => stx_projects()->publicProject($p + ['_role' => $role]),
                 'files' => stx_projects()->listFiles($id),
                 'build' => stx_projects()->latestBuild($id),
+                'aiUsage' => stx_ai()->usageSummaryForProject($id),
             ]);
         }
         $p = stx_projects()->requireRole($user, $id, ['owner', 'edit', 'view']);
@@ -31,6 +32,7 @@ try {
             'project' => stx_projects()->publicProject($p),
             'files' => stx_projects()->listFiles($id),
             'build' => stx_projects()->latestBuild($id),
+            'aiUsage' => stx_ai()->usageSummaryForProject($id),
         ]);
     }
 

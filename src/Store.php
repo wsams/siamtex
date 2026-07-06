@@ -144,6 +144,23 @@ CREATE TABLE IF NOT EXISTS file_revision_heads (
 
 CREATE INDEX IF NOT EXISTS idx_file_revisions_lookup ON file_revisions(project_id, path, created_at);
 SQL);
+        $this->migrateAiCallsColumns();
+    }
+
+    private function migrateAiCallsColumns(): void
+    {
+        $cols = $this->db->query('PRAGMA table_info(ai_calls)')->fetchAll(PDO::FETCH_ASSOC);
+        $names = array_column($cols, 'name');
+        if (!in_array('project_id', $names, true)) {
+            $this->db->exec('ALTER TABLE ai_calls ADD COLUMN project_id TEXT');
+        }
+        if (!in_array('prompt_tokens', $names, true)) {
+            $this->db->exec('ALTER TABLE ai_calls ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0');
+        }
+        if (!in_array('completion_tokens', $names, true)) {
+            $this->db->exec('ALTER TABLE ai_calls ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0');
+        }
+        $this->db->exec('CREATE INDEX IF NOT EXISTS idx_ai_calls_project ON ai_calls(project_id, created_at)');
     }
 
     public function pdo(): PDO
