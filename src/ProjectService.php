@@ -9,8 +9,15 @@ use ZipArchive;
 
 final class ProjectService
 {
+    private ?HistoryService $history = null;
+
     public function __construct(private Store $store)
     {
+    }
+
+    private function history(): HistoryService
+    {
+        return $this->history ??= new HistoryService($this->store);
     }
 
     public function roleFor(array $user, string $projectId): ?string
@@ -109,6 +116,10 @@ SQL);
         $files = Templates::filesFor($templateId);
         foreach ($files as $path => $content) {
             $this->writeFileRaw($id, $key, $path, $content);
+            $project = $this->getProject($id);
+            if ($project !== null) {
+                $this->history()->seedInitial($project, $path, $key, $content);
+            }
         }
         return $this->publicProject($this->getProject($id) + ['_role' => 'owner']);
     }
@@ -232,21 +243,80 @@ SQL);
         return Crypto::decrypt($key, (string) file_get_contents($encPath));
     }
 
-    public function writeFile(array $user, string $projectId, string $path, string $content): array
-    {
+    public function writeFile(
+        array $user,
+        string $projectId,
+        string $path,
+        string $content,
+        string $source = 'save',
+        ?string $label = null,
+        bool $recordHistory = true,
+    ): array {
         $project = $this->requireRole($user, $projectId, ['owner', 'edit']);
         $path = $this->safePath($path);
         if (strlen($content) > Config::maxUploadBytes()) {
             throw new RuntimeException('File too large (max ' . Config::maxUploadBytes() . ' bytes).');
         }
         $key = $this->projectKey($project);
+        $oldContent = null;
+        if (!self::isBinaryPath($path)) {
+            $encPath = $this->encFilePath($projectId, $path);
+            if (is_file($encPath)) {
+                $oldContent = Crypto::decrypt($key, (string) file_get_contents($encPath));
+            }
+        }
         $this->writeFileRaw($projectId, $key, $path, $content);
+        if ($recordHistory && !self::isBinaryPath($path)) {
+            $this->history()->recordChange(
+                $project,
+                $path,
+                $key,
+                $content,
+                (int) $user['id'],
+                $source,
+                $label,
+                $oldContent,
+            );
+        }
         $this->touchProject($projectId);
         return [
             'path' => $path,
             'size' => strlen($content),
             'binary' => self::isBinaryPath($path),
         ];
+    }
+
+    public function restoreFileRevision(array $user, string $projectId, string $path, int $revisionId): array
+    {
+        $project = $this->requireRole($user, $projectId, ['owner', 'edit']);
+        $path = $this->safePath($path);
+        if (self::isBinaryPath($path)) {
+            throw new RuntimeException('History is not available for binary files.');
+        }
+        $key = $this->projectKey($project);
+        $result = $this->history()->restore(
+            $project,
+            $path,
+            $key,
+            $revisionId,
+            (int) $user['id'],
+            function (string $content) use ($projectId, $key, $path): void {
+                $this->writeFileRaw($projectId, $key, $path, $content);
+                $this->touchProject($projectId);
+            },
+        );
+        return [
+            'path' => $path,
+            'size' => strlen($result['content']),
+            'revisionId' => $result['revisionId'],
+            'label' => $result['label'],
+            'content' => $result['content'],
+        ];
+    }
+
+    public function historyService(): HistoryService
+    {
+        return $this->history();
     }
 
     /**
@@ -295,6 +365,7 @@ SQL);
         if (is_file($encPath)) {
             unlink($encPath);
         }
+        $this->history()->deleteFileHistory($projectId, $path);
         $st = $this->store->pdo()->prepare('DELETE FROM project_files WHERE project_id = ? AND path = ?');
         $st->execute([$projectId, $path]);
         $this->touchProject($projectId);

@@ -32,6 +32,12 @@ function stx_compile(): CompileService
     return $c ??= new CompileService(stx_projects());
 }
 
+function stx_ai(): \SiamTeX\Ai\AiService
+{
+    static $a = null;
+    return $a ??= new \SiamTeX\Ai\AiService(stx_store(), stx_projects());
+}
+
 function stx_json(array $data, int $code = 200): void
 {
     http_response_code($code);

@@ -6,9 +6,43 @@ This document is the **operator and AI-agent runbook** for installing SiamTeX on
 
 ---
 
+## Choose the right install guide
+
+**Agents and humans:** read this section first. Do not run the generic checklist below when a specialized guide applies.
+
+| Situation | Primary doc | What to do |
+|-----------|-------------|------------|
+| **DigitalOcean droplet** (especially + home GPU / Ollama over Tailscale) | **[INSTALL_DO.md](./INSTALL_DO.md)** | Follow INSTALL_DO.md end-to-end — includes §0 prerequisites, DNS (Namecheap/DO/Cloudflare), PHP-FPM, Certbot, Docker TeX worker, optional AI. Use AGENTS.md for cross-cutting rules. |
+| **Cloud AI** (OpenAI, Gemini, Grok, OpenRouter/Claude, other OpenAI-compatible) | **[docs/ai-providers.md](./docs/ai-providers.md)** | Install core app per AGENTS.md or INSTALL_DO.md, then configure `SIAMTEX_AI_*` in `/etc/siamtex.env` using the matching provider recipe. Restart php-fpm; verify **AI → Test connection**. |
+| University / corporate Linux, Nginx, no AI, custom paths | **This file (AGENTS.md)** | Full generic runbook below. |
+| Tailscale ACL hardening or Ollama bind details only | [docs/tailscale-ollama.md](./docs/tailscale-ollama.md) | Supplement after INSTALL_DO.md §7. |
+| AI provider comparison and BYOK | [docs/ai-providers.md](./docs/ai-providers.md) | All install paths — ask human which provider before writing keys. |
+
+**If the human says “DigitalOcean”, “DO droplet”, or “droplet + home Ollama”:** open and follow **[INSTALL_DO.md](./INSTALL_DO.md)** as the install source of truth. Mention that in your deployment report.
+
+**If the human says “OpenAI”, “Gemini”, “Grok”, “Claude”, or “Anthropic”:** configure AI per **[docs/ai-providers.md](./docs/ai-providers.md)**. Claude/Anthropic uses **OpenRouter** (or another OpenAI-compatible gateway), not `api.anthropic.com` directly.
+
+**Sample agent prompt (cloud AI):**
+
+> Read `AGENTS.md` and `docs/ai-providers.md`. Install SiamTeX, then configure OpenAI (or Gemini / Grok / OpenRouter) in `/etc/siamtex.env`. I will paste the API key when you ask. Do not commit secrets.
+
+**Sample agent prompt (DigitalOcean):**
+
+> Read `INSTALL_DO.md` in the SiamTeX repo and install on this DigitalOcean droplet.  
+> Web URL base: `https://YOUR_DOMAIN/siamtex`  
+> I will use Tailscale to reach Ollama at home for AI.  
+> Do not commit secrets or production URLs to git.
+
+**Sample agent prompt (generic):**
+
+> Read `AGENTS.md` in the SiamTeX repo and install the service on this server.  
+> …
+
+---
+
 ## How to use an agent to install SiamTeX
 
-Give your agent **SSH or shell access** to the target server (or a staging VM with the same OS stack), then paste a prompt like:
+Give your agent **SSH or shell access** to the target server (or a staging VM with the same OS stack), then paste a prompt like the **generic** example below — or the **DigitalOcean** example in [Choose the right install guide](#choose-the-right-install-guide) if that matches your host.
 
 > Read `AGENTS.md` in the SiamTeX repo and install the service on this server.  
 > Web URL base: `https://YOUR_HOST/siamtex`  
@@ -43,6 +77,8 @@ Ask the human for anything missing before changing production config.
 | TLS termination | Let’s Encrypt, existing cert, reverse proxy | Yes |
 | GitHub OAuth | on / off | Yes |
 | Server RAM / disk | ≥ 2 GB RAM, ≥ 40 GB disk | Warn if low |
+| **AI provider** (if any) | `none`, `ollama`, `openai`, `google`, `xai`, `openrouter`, `openai_compatible` | Ask — see [docs/ai-providers.md](./docs/ai-providers.md) |
+| **AI credentials** | API key or Tailscale/Ollama hostname | Human provides; write only to `/etc/siamtex.env` or per-user BYOK |
 
 **Defaults if unspecified:**
 
@@ -60,9 +96,11 @@ Ask the human for anything missing before changing production config.
 | SQLite (`data/siamtex.sqlite`) | Users, projects, build metadata — **gitignored** |
 | Encrypted blobs (`data/projects/`) | AES-256-GCM project files and PDFs — **gitignored** |
 | Docker TeX worker | Sandboxed `latexmk` compiles — **no host TeX install** |
-| `/etc/siamtex.env` | OAuth + optional keys — **never in git** |
+| `/etc/siamtex.env` | OAuth + optional AI keys — **never in git** |
 
 Compiles: PHP decrypts → temp dir → `docker run --network=none … latexmk` → encrypt PDF → wipe plaintext.
+
+**Optional AI:** PHP proxies `POST /v1/chat/completions` to the configured provider (Ollama, OpenAI, Gemini, Grok, OpenRouter, etc.). See [docs/ai-providers.md](./docs/ai-providers.md). Agents must ask which provider — do not assume home Ollama. **AI features are alpha/experimental;** set expectations that model choice drives accuracy.
 
 ---
 
@@ -385,4 +423,6 @@ See [SPECS.md](./SPECS.md) §5 (security requirements) for product-level constra
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — code contributions
 - [config/README.md](./config/README.md) — config template index
 - [SPECS.md](./SPECS.md) — full requirements
-- [AI.md](./AI.md) — future BYOK AI integration (not required for install)
+- [INSTALL_DO.md](./INSTALL_DO.md) — DigitalOcean droplet + Tailscale to home Ollama
+- [docs/ai-providers.md](./docs/ai-providers.md) — OpenAI, Gemini, Grok, OpenRouter/Claude, Ollama env recipes
+- [AI.md](./AI.md) — BYOK AI architecture (optional; server Ollama supported)

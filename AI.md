@@ -6,6 +6,10 @@ This document describes how to add **optional, user-controlled AI** to SiamTeX s
 
 **Design principle:** SiamTeX does **not** ship a single shared paid API key for all users. Each person connects **their own** endpoint and credentials (**BYOK** — bring your own key), or a **local/self-hosted** model (Ollama, etc.). The app stores only what is needed to call *their* provider, encrypted at rest.
 
+**Operational setup (install agents):** [docs/ai-providers.md](./docs/ai-providers.md) — copy-paste env recipes for OpenAI, Gemini, Grok, OpenRouter (Claude), and Ollama.
+
+> **Status: alpha / experimental.** AI assist and fix-problems are useful for drafts and debugging hints, not guaranteed correct LaTeX. Quality depends on the model, prompt size, and provider. Users must review every suggestion before it touches their project.
+
 ---
 
 ## 1. Goals

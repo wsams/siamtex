@@ -9,7 +9,21 @@ description: >-
 
 # Install SiamTeX
 
-Deploy the SiamTeX LaTeX studio on a Linux host. **Read [AGENTS.md](../../../AGENTS.md) first** — it is the full runbook. This skill is the condensed execution checklist.
+Deploy the SiamTeX LaTeX studio on a Linux host.
+
+## Which doc to follow
+
+| Host / AI | Read first |
+|-----------|------------|
+| **DigitalOcean droplet** (incl. Tailscale → home Ollama) | **[INSTALL_DO.md](../../../INSTALL_DO.md)** |
+| **Cloud AI** (OpenAI, Gemini, Grok, OpenRouter/Claude) | **[docs/ai-providers.md](../../../docs/ai-providers.md)** after core install |
+| Any other Linux server | **[AGENTS.md](../../../AGENTS.md)** |
+
+If the user says **DigitalOcean**, **DO**, or **droplet + home GPU**, use **INSTALL_DO.md**.  
+If they name **OpenAI**, **Gemini**, **Grok**, **Claude**, or **Anthropic**, use **docs/ai-providers.md** (Claude → OpenRouter).  
+**Ask which AI provider** if not stated — do not assume Ollama.
+
+Always apply cross-cutting rules from AGENTS.md: web exposure, security, no secrets in git.
 
 ## Before running commands
 
@@ -20,6 +34,7 @@ Collect from the human (ask if missing):
 - Web server: Apache or Nginx
 - PHP-FPM version and pool user (usually `www-data`)
 - GitHub OAuth: yes/no
+- **AI:** none / Ollama (home) / OpenAI / Gemini / Grok / OpenRouter (Claude) — see [docs/ai-providers.md](../../../docs/ai-providers.md). **Alpha features** — set expectations with the human.
 
 Never commit secrets, `.htaccess`, or `data/` to git. Never write production URLs into tracked source files.
 
@@ -42,6 +57,7 @@ Never commit secrets, `.htaccess`, or `data/` to git. Never write production URL
 - [ ] restart php-fpm + web server
 - [ ] curl api/auth_me.php — JSON OK
 - [ ] browser: create project, compile PDF
+- [ ] if AI requested: docs/ai-providers.md → `/etc/siamtex.env` → restart php-fpm → AI test connection
 ```
 
 ## Key paths
@@ -72,6 +88,8 @@ See troubleshooting table in [AGENTS.md](../../../AGENTS.md). Do not weaken Dock
 
 ## Additional resources
 
+- AI providers (OpenAI, Gemini, Grok, OpenRouter, Ollama): [docs/ai-providers.md](../../../docs/ai-providers.md)
+- DigitalOcean + home GPU: [INSTALL_DO.md](../../../INSTALL_DO.md)
 - Full runbook: [AGENTS.md](../../../AGENTS.md)
 - Config templates: [config/README.md](../../../config/README.md)
 - Security requirements: [SPECS.md](../../../SPECS.md) §5

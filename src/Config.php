@@ -206,4 +206,70 @@ final class Config
     {
         return (int) (getenv('SIAMTEX_SOFT_DELETE_DAYS') ?: '30');
     }
+
+    public static function aiEnabled(): bool
+    {
+        $raw = getenv('SIAMTEX_AI_ENABLED');
+        if ($raw !== false) {
+            $v = strtolower(trim((string) $raw));
+            if (in_array($v, ['0', 'false', 'no', 'off'], true)) {
+                return false;
+            }
+            if (in_array($v, ['1', 'true', 'yes', 'on'], true)) {
+                return true;
+            }
+        }
+        return self::aiBaseUrl() !== '';
+    }
+
+    public static function aiProvider(): string
+    {
+        $v = trim((string) (getenv('SIAMTEX_AI_PROVIDER') ?: 'ollama'));
+        return $v !== '' ? $v : 'ollama';
+    }
+
+    public static function aiBaseUrl(): string
+    {
+        return rtrim(trim((string) (getenv('SIAMTEX_AI_BASE_URL') ?: '')), '/');
+    }
+
+    public static function aiModel(): string
+    {
+        return trim((string) (getenv('SIAMTEX_AI_MODEL') ?: ''));
+    }
+
+    public static function aiApiKey(): string
+    {
+        return trim((string) (getenv('SIAMTEX_AI_API_KEY') ?: ''));
+    }
+
+    public static function aiMaxTokens(): int
+    {
+        $n = (int) (getenv('SIAMTEX_AI_MAX_TOKENS') ?: '16384');
+        return $n > 256 ? $n : 16384;
+    }
+
+    public static function aiTimeoutSeconds(): int
+    {
+        $n = (int) (getenv('SIAMTEX_AI_TIMEOUT') ?: '120');
+        return $n > 10 ? $n : 120;
+    }
+
+    public static function aiMaxCallsPerHour(): int
+    {
+        $n = (int) (getenv('SIAMTEX_AI_MAX_CALLS_PER_HOUR') ?: '20');
+        return $n > 0 ? $n : 20;
+    }
+
+    public static function aiMaxContextChars(): int
+    {
+        $n = (int) (getenv('SIAMTEX_AI_MAX_CONTEXT_CHARS') ?: '200000');
+        return $n > 5000 ? $n : 200000;
+    }
+
+    public static function maxFileRevisions(): int
+    {
+        $n = (int) (getenv('SIAMTEX_MAX_FILE_REVISIONS') ?: '150');
+        return $n >= 20 ? $n : 150;
+    }
 }

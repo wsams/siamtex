@@ -93,6 +93,56 @@ CREATE TABLE IF NOT EXISTS builds (
 
 CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_id);
 CREATE INDEX IF NOT EXISTS idx_builds_project ON builds(project_id, created_at);
+
+CREATE TABLE IF NOT EXISTS user_ai_settings (
+  user_id INTEGER PRIMARY KEY,
+  provider TEXT NOT NULL DEFAULT 'ollama',
+  base_url TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  api_key_enc TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  max_tokens INTEGER,
+  timeout_seconds INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS ai_calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_calls_user_time ON ai_calls(user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS file_revisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  parent_id INTEGER,
+  source TEXT NOT NULL DEFAULT 'save',
+  label TEXT,
+  user_id INTEGER,
+  size INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  FOREIGN KEY(parent_id) REFERENCES file_revisions(id) ON DELETE SET NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS file_revision_heads (
+  project_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  revision_id INTEGER NOT NULL,
+  PRIMARY KEY(project_id, path),
+  FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  FOREIGN KEY(revision_id) REFERENCES file_revisions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_revisions_lookup ON file_revisions(project_id, path, created_at);
 SQL);
     }
 

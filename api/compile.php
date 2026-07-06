@@ -18,7 +18,7 @@ try {
     // Optional save-all before compile
     if (!empty($body['files']) && is_array($body['files'])) {
         foreach ($body['files'] as $path => $content) {
-            stx_projects()->writeFile($user, $id, (string) $path, (string) $content);
+            stx_projects()->writeFile($user, $id, (string) $path, (string) $content, 'compile');
         }
     }
     $project = stx_projects()->requireRole($user, $id, ['owner', 'edit']);

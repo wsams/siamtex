@@ -9,6 +9,8 @@
     authRequired: false,
     providers: [],
     oauthConfigured: false,
+    aiEnabled: false,
+    aiConfig: null,
     projects: [],
     templates: [],
     commonFiles: [],
@@ -30,12 +32,19 @@
 
   function api(path, opts = {}) {
     const headers = Object.assign({ 'X-SiamTeX-CSRF': '1' }, opts.headers || {});
+    const signal = opts.signal;
     if (opts.json !== undefined) {
       headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(opts.json);
       delete opts.json;
     }
-    return fetch(BASE + path, { credentials: 'same-origin', ...opts, headers }).then(async (res) => {
+    const { signal: _s, ...fetchOpts } = opts;
+    return fetch(BASE + path, {
+      credentials: 'same-origin',
+      ...fetchOpts,
+      headers,
+      signal,
+    }).then(async (res) => {
       const ct = res.headers.get('content-type') || '';
       if (ct.includes('application/json')) {
         const data = await res.json();
@@ -53,6 +62,184 @@
     el.className = 'toast ' + kind;
     clearTimeout(el._t);
     el._t = setTimeout(() => { el.className = 'toast hidden'; }, 3200);
+  }
+
+  function aiTimeoutSeconds() {
+    const n = Number(state.aiConfig?.timeoutSeconds);
+    return Number.isFinite(n) && n > 10 ? n : 180;
+  }
+
+  function formatAiDuration(totalSec) {
+    const sec = Math.max(0, Math.floor(totalSec));
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return m > 0 ? `${m}:${String(s).padStart(2, '0')}` : `${s}s`;
+  }
+
+  let aiWaitGlobal = null;
+
+  /**
+   * Progress UI for long-running AI calls (elapsed time, timeout countdown, cancel).
+   * @param {HTMLElement} mount
+   * @param {{ title?: string, subtitle?: string, phases?: string[] }} opts
+   */
+  function createAiWait(mount, opts = {}) {
+    const timeout = aiTimeoutSeconds();
+    const model = state.aiConfig?.model || 'AI model';
+    const phases = opts.phases || [
+      `Connecting to ${model}…`,
+      'Sending your LaTeX context over the network…',
+      'Model is reading the source and errors — usually 20–60 seconds…',
+      'Still generating a response — remote Ollama models can be slow…',
+      'Approaching the server time limit — cancel to retry with a smaller scope…',
+    ];
+    const title = opts.title || 'AI is working';
+    const subtitle = opts.subtitle || 'Responses are not streamed yet; this bar tracks elapsed time and the server timeout.';
+
+    mount.classList.remove('hidden');
+    mount.innerHTML = `
+      <div class="ai-wait" role="status" aria-live="polite" aria-busy="true">
+        <div class="ai-wait-header">
+          <span class="ai-wait-spinner" aria-hidden="true"></span>
+          <div class="ai-wait-copy">
+            <div class="ai-wait-title">${esc(title)}</div>
+            <div class="ai-wait-phase" id="aiWaitPhase">${esc(phases[0])}</div>
+            <div class="ai-wait-sub">${esc(subtitle)}</div>
+          </div>
+        </div>
+        <div class="ai-wait-bar" aria-hidden="true"><span class="ai-wait-bar-fill"></span></div>
+        <div class="ai-wait-meta">
+          <span>Elapsed <strong class="ai-wait-elapsed">0s</strong></span>
+          <span>Limit <strong>${esc(formatAiDuration(timeout))}</strong></span>
+          <span class="ai-wait-remain-wrap">Remaining <strong class="ai-wait-remain">${esc(formatAiDuration(timeout))}</strong></span>
+        </div>
+        <button type="button" class="ghost ai-wait-cancel">Cancel request</button>
+      </div>`;
+
+    const phaseEl = mount.querySelector('.ai-wait-phase');
+    const elapsedEl = mount.querySelector('.ai-wait-elapsed');
+    const remainEl = mount.querySelector('.ai-wait-remain');
+    const remainWrap = mount.querySelector('.ai-wait-remain-wrap');
+    const barFill = mount.querySelector('.ai-wait-bar-fill');
+    const bar = mount.querySelector('.ai-wait-bar');
+    const cancelBtn = mount.querySelector('.ai-wait-cancel');
+    const ac = new AbortController();
+    let tick = null;
+    let startedAt = 0;
+    let cancelled = false;
+
+    const phaseFor = (sec) => {
+      if (sec < 6) return phases[0];
+      if (sec < 18) return phases[1];
+      if (sec < 40) return phases[2];
+      if (sec < timeout * 0.8) return phases[3];
+      return phases[4] || phases[phases.length - 1];
+    };
+
+    const syncGlobal = (sec, remain) => {
+      if (!aiWaitGlobal) return;
+      const gPhase = aiWaitGlobal.querySelector('.ai-global-phase');
+      const gElapsed = aiWaitGlobal.querySelector('.ai-global-elapsed');
+      const gRemain = aiWaitGlobal.querySelector('.ai-global-remain');
+      if (gPhase) gPhase.textContent = phaseFor(sec);
+      if (gElapsed) gElapsed.textContent = formatAiDuration(sec);
+      if (gRemain) gRemain.textContent = formatAiDuration(remain);
+    };
+
+    return {
+      signal: ac.signal,
+      start() {
+        startedAt = Date.now();
+        document.body.classList.add('ai-busy');
+        aiWaitGlobal = document.createElement('div');
+        aiWaitGlobal.className = 'ai-global-busy';
+        aiWaitGlobal.setAttribute('role', 'status');
+        aiWaitGlobal.innerHTML = `
+          <span class="ai-global-spinner" aria-hidden="true"></span>
+          <span class="ai-global-title">${esc(title)}</span>
+          <span class="ai-global-phase">${esc(phases[0])}</span>
+          <span class="ai-global-times">
+            <span class="ai-global-elapsed">0s</span>
+            <span class="ai-global-sep">/</span>
+            <span class="ai-global-remain">${esc(formatAiDuration(timeout))}</span>
+          </span>`;
+        document.querySelector('.topbar')?.insertAdjacentElement('afterend', aiWaitGlobal);
+
+        tick = setInterval(() => {
+          const sec = Math.floor((Date.now() - startedAt) / 1000);
+          const remain = Math.max(0, timeout - sec);
+          elapsedEl.textContent = formatAiDuration(sec);
+          remainEl.textContent = formatAiDuration(remain);
+          phaseEl.textContent = phaseFor(sec);
+          const pct = Math.min(100, (sec / timeout) * 100);
+          barFill.style.width = `${pct}%`;
+          bar.classList.toggle('ai-warn', pct >= 70 && pct < 92);
+          bar.classList.toggle('ai-danger', pct >= 92);
+          remainWrap.classList.toggle('ai-warn', remain > 0 && remain <= 30);
+          remainWrap.classList.toggle('ai-danger', remain === 0);
+          syncGlobal(sec, remain);
+        }, 250);
+      },
+      finish() {
+        clearInterval(tick);
+        mount.classList.add('hidden');
+        mount.innerHTML = '';
+        document.body.classList.remove('ai-busy');
+        aiWaitGlobal?.remove();
+        aiWaitGlobal = null;
+      },
+      fail(message) {
+        clearInterval(tick);
+        document.body.classList.remove('ai-busy');
+        aiWaitGlobal?.remove();
+        aiWaitGlobal = null;
+        mount.classList.remove('hidden');
+        mount.innerHTML = `
+          <div class="ai-wait ai-wait-error" role="alert">
+            <div class="ai-wait-title">AI request failed</div>
+            <p class="ai-wait-phase">${esc(message)}</p>
+            <p class="ai-wait-sub">You can adjust your project, try again, or switch to a smaller scope / different model.</p>
+          </div>`;
+      },
+      cancel() {
+        cancelled = true;
+        ac.abort();
+      },
+      wasCancelled() {
+        return cancelled;
+      },
+      onCancel(fn) {
+        cancelBtn.onclick = () => {
+          cancelBtn.disabled = true;
+          cancelBtn.textContent = 'Cancelling…';
+          fn();
+        };
+      },
+    };
+  }
+
+  async function runAiRequest(path, json, wait, buttons = []) {
+    buttons.forEach((b) => { if (b) b.disabled = true; });
+    wait.onCancel(() => wait.cancel());
+    wait.start();
+    try {
+      const result = await api(path, { method: 'POST', json, signal: wait.signal });
+      wait.finish();
+      return result;
+    } catch (e) {
+      if (wait.wasCancelled() || e.name === 'AbortError') {
+        wait.finish();
+        throw new Error('AI request cancelled.');
+      }
+      let msg = String(e.message || e);
+      if (/timeout|timed out|could not reach|empty response/i.test(msg)) {
+        msg = `${msg} (limit ${formatAiDuration(aiTimeoutSeconds())} — try a smaller file or increase SIAMTEX_AI_TIMEOUT)`;
+      }
+      wait.fail(msg);
+      throw new Error(msg);
+    } finally {
+      buttons.forEach((b) => { if (b) b.disabled = false; });
+    }
   }
 
   function esc(s) {
@@ -165,68 +352,142 @@
     scheduleAutoCompile();
   }
 
+  const INSERT_MENUS = [
+    {
+      id: 'text',
+      label: 'Text',
+      items: ['bold', 'italic', 'underline', 'emph', 'color', 'large', 'small'],
+    },
+    {
+      id: 'structure',
+      label: 'Structure',
+      items: ['section', 'subsection', 'subsubsection', 'itemize', 'enumerate', 'item', 'link', 'email', 'quote', 'center', 'hline', 'newline', 'vspace'],
+    },
+    {
+      id: 'math',
+      label: 'Math',
+      items: ['mathInline', 'mathBlock', 'fraction', 'sqrt', 'sum'],
+    },
+    {
+      id: 'resume',
+      label: 'Resume',
+      items: ['resumeHeader', 'resumeSection', 'resumeJob', 'resumeSkill', 'geometry', 'fontsize10'],
+    },
+    {
+      id: 'insert',
+      label: 'Insert',
+      items: ['table', 'image', 'footnote', 'comment'],
+    },
+  ];
+
+  const QUICK_SNIPPETS = ['bold', 'italic', 'underline'];
+
+  function snippetHint(key) {
+    const snip = SNIPPETS[key];
+    if (!snip) return '';
+    if (snip.wrap) {
+      const [left, right] = snip.wrap;
+      const sample = left.replace(/\\begin\{[^}]+\}/, '').replace(/^\\/, '').replace(/\{$/, '');
+      return sample + (right ? '…' : '');
+    }
+    if (snip.block) {
+      const line = snip.block.split('\n').find((l) => l.trim() && !l.trim().startsWith('%'));
+      return line ? line.trim().slice(0, 28) + (line.trim().length > 28 ? '…' : '') : '';
+    }
+    return '';
+  }
+
+  function menuEntryHtml(key) {
+    const snip = SNIPPETS[key];
+    if (!snip) return '';
+    const hint = snippetHint(key);
+    return `<button type="button" class="menu-entry" role="menuitem" data-snip="${key}">
+      <span class="menu-entry-label">${esc(snip.label)}</span>
+      ${hint ? `<span class="menu-entry-hint">${esc(hint)}</span>` : ''}
+    </button>`;
+  }
+
   function toolbarHtml(canEdit) {
     if (!canEdit) {
-      return '<div class="insert-toolbar"><span class="toolbar-hint">View only</span></div>';
+      return '<div class="insert-menubar"><span class="toolbar-hint">View only</span></div>';
     }
-    const btn = (key, title) =>
-      `<button type="button" class="tb" data-snip="${key}" title="${esc(title || SNIPPETS[key]?.label || key)}">${esc(title || SNIPPETS[key]?.label || key)}</button>`;
+
+    const quickBtns = QUICK_SNIPPETS.map((key) => {
+      const snip = SNIPPETS[key];
+      const glyph = key === 'bold' ? '<strong>B</strong>' : key === 'italic' ? '<em>I</em>' : '<span style="text-decoration:underline">U</span>';
+      return `<button type="button" class="tb-icon" data-snip="${key}" title="${esc(snip?.label || key)}">${glyph}</button>`;
+    }).join('');
+
+    const menus = INSERT_MENUS.map((menu) => `
+      <div class="menu-item" data-menu="${menu.id}">
+        <button type="button" class="menu-trigger" aria-haspopup="true" aria-expanded="false">${esc(menu.label)}</button>
+        <div class="menu-dropdown" role="menu" hidden>
+          ${menu.items.map(menuEntryHtml).join('')}
+        </div>
+      </div>`).join('');
 
     return `
-      <div class="insert-toolbar" id="insertToolbar">
-        <div class="tb-group">
-          <span class="tb-label">Text</span>
-          ${btn('bold', 'Bold')}
-          ${btn('italic', 'Italic')}
-          ${btn('underline', 'Underline')}
-          ${btn('emph', 'Emph')}
-          ${btn('color', 'Color')}
-          ${btn('large', 'Larger')}
-          ${btn('small', 'Smaller')}
+      <div class="insert-menubar" id="insertToolbar">
+        <div class="insert-menubar-row">
+          <div class="insert-quick" aria-label="Quick formatting">
+            ${quickBtns}
+            <span class="menubar-sep" aria-hidden="true"></span>
+          </div>
+          <nav class="menubar" role="menubar" aria-label="Insert LaTeX">
+            ${menus}
+          </nav>
         </div>
-        <div class="tb-group">
-          <span class="tb-label">Structure</span>
-          ${btn('section', 'Heading')}
-          ${btn('subsection', 'Subhead')}
-          ${btn('itemize', 'Bullets')}
-          ${btn('enumerate', 'Numbers')}
-          ${btn('item', 'Item')}
-          ${btn('link', 'Link')}
-          ${btn('hline', 'Line')}
-          ${btn('vspace', 'Space')}
-        </div>
-        <div class="tb-group">
-          <span class="tb-label">Math</span>
-          ${btn('mathInline', 'Inline $')}
-          ${btn('mathBlock', 'Block')}
-          ${btn('fraction', 'Fraction')}
-          ${btn('sqrt', 'Sqrt')}
-        </div>
-        <div class="tb-group">
-          <span class="tb-label">Resume</span>
-          ${btn('resumeHeader', 'Header')}
-          ${btn('resumeSection', 'Section')}
-          ${btn('resumeJob', 'Job')}
-          ${btn('resumeSkill', 'Skills')}
-        </div>
-        <div class="tb-group">
-          <span class="tb-label">More</span>
-          ${btn('table', 'Table')}
-          ${btn('image', 'Image')}
-          ${btn('quote', 'Quote')}
-          ${btn('center', 'Center')}
-          ${btn('footnote', 'Footnote')}
-          ${btn('comment', 'Comment')}
-          ${btn('geometry', 'Margins')}
-        </div>
-        <p class="toolbar-hint">Select text, then click Bold/Italic/Color — or click a button to insert a starter snippet. You do not need to know LaTeX commands.</p>
+        <p class="toolbar-hint">Select text, then use <strong>B</strong> / <em>I</em> / <u>U</u> or pick an item from the menus — snippets are inserted at the cursor.</p>
       </div>`;
   }
 
-  function bindToolbar() {
-    document.getElementById('insertToolbar')?.querySelectorAll('[data-snip]').forEach((btn) => {
-      btn.addEventListener('click', () => insertSnippet(btn.getAttribute('data-snip')));
+  function closeInsertMenus(except) {
+    document.querySelectorAll('#insertToolbar .menu-item').forEach((item) => {
+      if (except && item === except) return;
+      item.classList.remove('open');
+      const trigger = item.querySelector('.menu-trigger');
+      const panel = item.querySelector('.menu-dropdown');
+      if (trigger) trigger.setAttribute('aria-expanded', 'false');
+      if (panel) panel.hidden = true;
     });
+  }
+
+  function bindToolbar() {
+    const bar = document.getElementById('insertToolbar');
+    if (!bar) return;
+
+    bar.querySelectorAll('[data-snip]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        insertSnippet(btn.getAttribute('data-snip'));
+        closeInsertMenus();
+      });
+    });
+
+    bar.querySelectorAll('.menu-trigger').forEach((trigger) => {
+      trigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const item = trigger.closest('.menu-item');
+        const panel = item?.querySelector('.menu-dropdown');
+        if (!item || !panel) return;
+        const willOpen = !item.classList.contains('open');
+        closeInsertMenus();
+        if (willOpen) {
+          item.classList.add('open');
+          trigger.setAttribute('aria-expanded', 'true');
+          panel.hidden = false;
+          panel.querySelector('.menu-entry')?.focus();
+        }
+      });
+    });
+
+    if (!bar.dataset.menusBound) {
+      bar.dataset.menusBound = '1';
+      document.addEventListener('click', () => closeInsertMenus());
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeInsertMenus();
+      });
+    }
   }
 
   /* ---------- Top bar / dashboard ---------- */
@@ -296,7 +557,7 @@
         <div class="dash-head">
           <div>
             <h1>Your projects</h1>
-            <p>Start from a template — the editor opens with sample text you can edit using the toolbar buttons.</p>
+            <p>Start from a template — the editor opens with sample text you can edit using the Insert menus.</p>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button type="button" id="btnNew" class="primary">New project</button>
@@ -544,6 +805,8 @@
           <button type="button" id="btnExport">Export</button>
           ${p.role === 'owner' ? '<button type="button" id="btnShare">Share</button>' : ''}
           <button type="button" id="btnTools">Tools</button>
+          ${canEdit ? '<button type="button" id="btnAi">AI</button>' : ''}
+          <button type="button" id="btnHistory" title="Version history">History</button>
         </div>
         ${toolbarHtml(canEdit)}
         <aside class="files">
@@ -554,7 +817,7 @@
           </div>` : ''}
         </aside>
         <section class="editor-pane">
-          <div class="pane-label" id="editorLabel">Editor — click here and type, or use the buttons above</div>
+          <div class="pane-label" id="editorLabel">Editor — click here and type, or use the Insert menus above</div>
           <div id="editorHost"></div>
         </section>
         <section class="preview-pane">
@@ -582,6 +845,8 @@
     };
     document.getElementById('btnShare')?.addEventListener('click', shareProject);
     document.getElementById('btnTools').onclick = showTools;
+    document.getElementById('btnAi')?.addEventListener('click', showAiAssist);
+    document.getElementById('btnHistory')?.addEventListener('click', showHistory);
     document.getElementById('btnAddFile')?.addEventListener('click', addFile);
     document.getElementById('projName').onchange = async (e) => {
       if (!canEdit) return;
@@ -742,7 +1007,7 @@
     const label = document.getElementById('editorLabel');
     if (label) {
       label.textContent = path + (canEditProject(state.project)
-        ? ' — click in the editor and type, or use the toolbar buttons'
+        ? ' — click in the editor and type, or use the Insert menus'
         : ' — view only');
     }
     const text = state.contents[path] || '';
@@ -758,14 +1023,14 @@
     renderFileList();
   }
 
-  async function saveActive() {
+  async function saveActive(source = 'save') {
     const path = state.activePath;
     if (!path || !state.dirty[path] || isBinaryFile({ path })) return;
     const content = state.editor ? state.editor.getValue() : (state.contents[path] ?? '');
     state.contents[path] = content;
     await api('/api/files.php?id=' + encodeURIComponent(state.project.id), {
       method: 'PUT',
-      json: { path, content },
+      json: { path, content, source },
     });
     state.dirty[path] = false;
     renderFileList();
@@ -837,16 +1102,22 @@
       return;
     }
     const diags = state.build?.diagnostics || [];
+    const errors = diags.filter((d) => d.severity === 'error');
+    const canFix = canEditProject(state.project) && state.aiEnabled && errors.length > 0;
     if (!diags.length) {
       body.innerHTML = '<div class="pill">No problems from the last build. Click Compile when you are ready.</div>';
       return;
     }
-    body.innerHTML = diags.map((d, i) => `
+    const fixBar = canFix
+      ? `<div class="problems-actions"><button type="button" id="btnAiFixProblems" class="primary">AI fix problems</button><span class="pill">${errors.length} error${errors.length === 1 ? '' : 's'}</span></div>`
+      : '';
+    body.innerHTML = fixBar + diags.map((d, i) => `
       <div class="diag" data-i="${i}">
         <span class="sev-${esc(d.severity)}">${esc(d.severity)}</span>
         <span>${esc(d.message)}</span>
         <span class="loc">${esc(d.file || state.project.mainFile)}${d.line ? ':' + d.line : ''}</span>
       </div>`).join('');
+    document.getElementById('btnAiFixProblems')?.addEventListener('click', () => showAiFixProblems(errors));
     body.querySelectorAll('.diag').forEach((el) => {
       el.onclick = async () => {
         const d = diags[Number(el.getAttribute('data-i'))];
@@ -1075,7 +1346,7 @@
         if (existing.has(path)) throw new Error('That file already exists.');
         const meta = await api('/api/files.php?id=' + encodeURIComponent(state.project.id), {
           method: 'PUT',
-          json: { path, content },
+          json: { path, content, source: 'import' },
         });
         state.files.push({
           path: meta.file.path,
@@ -1146,6 +1417,519 @@
     run();
   }
 
+  function showAiAssist() {
+    if (!state.aiEnabled) {
+      toast('AI is not configured on this server', 'error');
+      return;
+    }
+    if (!state.project || !canEditProject(state.project)) {
+      toast('Open an editable project first', 'error');
+      return;
+    }
+    const path = state.activePath;
+    if (!path || isBinaryFile({ path })) {
+      toast('Open a .tex or text file to edit with AI', 'error');
+      return;
+    }
+    const cfg = state.aiConfig || {};
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal modal-wide">
+        <h2>AI assist</h2>
+        <p class="ai-disclaimer"><strong>Alpha / experimental.</strong> Sends the current file (or whole project) to your configured provider. Accuracy and usefulness depend on your model — review every change before accepting.</p>
+        <p class="pill">${esc(cfg.model || 'model')} @ ${esc(cfg.baseUrl || 'provider')}</p>
+        <label>Scope</label>
+        <select id="aiScope">
+          <option value="file">Current file (${esc(path)})</option>
+          <option value="project">Whole project (.tex / .bib)</option>
+        </select>
+        <label>Instruction</label>
+        <textarea id="aiInstruction" rows="4" placeholder="e.g. Improve wording, fix LaTeX errors, expand the summary section…"></textarea>
+        <label>Extra reference text (optional)</label>
+        <textarea id="aiContext" rows="3" placeholder="Paste notes, job description, or imported text…"></textarea>
+        <div class="ai-presets">
+          <button type="button" class="tb" data-preset="Improve wording and clarity. Keep structure.">Polish</button>
+          <button type="button" class="tb" data-preset="Fix LaTeX syntax issues. Return valid LaTeX only.">Fix LaTeX</button>
+          <button type="button" class="tb" data-preset="Expand with more detail while staying concise.">Expand</button>
+        </div>
+        <div id="aiWaitMount" class="ai-wait-mount hidden"></div>
+        <div id="aiPreview" class="ai-preview hidden"></div>
+        <div class="modal-actions">
+          <button type="button" id="aiTest" class="ghost">Test connection</button>
+          <button type="button" id="aiRun" class="primary">Run</button>
+          <button type="button" id="aiAccept" class="primary hidden">Accept into editor</button>
+          <button type="button" id="aiClose">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(backdrop);
+    let pending = null;
+    const waitMount = backdrop.querySelector('#aiWaitMount');
+    const runBtn = backdrop.querySelector('#aiRun');
+    const testBtn = backdrop.querySelector('#aiTest');
+    const closeBtn = backdrop.querySelector('#aiClose');
+    const acceptBtn = backdrop.querySelector('#aiAccept');
+
+    function modelLabel() {
+      return state.aiConfig?.model || 'the model';
+    }
+
+    backdrop.querySelectorAll('[data-preset]').forEach((btn) => {
+      btn.onclick = () => {
+        backdrop.querySelector('#aiInstruction').value = btn.getAttribute('data-preset');
+      };
+    });
+
+    backdrop.querySelector('#aiTest').onclick = async () => {
+      const wait = createAiWait(waitMount, {
+        title: 'Testing AI connection',
+        subtitle: 'Quick ping to your configured provider.',
+        phases: [
+          'Contacting the AI provider…',
+          'Waiting for a short test reply…',
+          'Still waiting on the model…',
+          'Connection is slow — check Tailscale / Ollama…',
+          'Nearly at the time limit…',
+        ],
+      });
+      try {
+        const r = await runAiRequest('/api/ai_test.php', {}, wait, [testBtn, runBtn, closeBtn]);
+        toast(r.ok ? 'AI connection OK' : 'Unexpected reply: ' + r.reply, r.ok ? 'ok' : 'error');
+      } catch (e) {
+        toast(e.message, e.message.includes('cancelled') ? '' : 'error');
+      }
+    };
+
+    backdrop.querySelector('#aiRun').onclick = async () => {
+      const instruction = backdrop.querySelector('#aiInstruction').value.trim();
+      if (!instruction) {
+        toast('Enter an instruction', 'error');
+        return;
+      }
+      const scope = backdrop.querySelector('#aiScope').value;
+      const payload = {
+        projectId: state.project.id,
+        instruction,
+        mode: scope === 'project' ? 'project' : 'file',
+        path: scope === 'file' ? path : undefined,
+        context: backdrop.querySelector('#aiContext').value.trim(),
+      };
+      const wait = createAiWait(waitMount, {
+        title: scope === 'project' ? 'AI editing project' : `AI editing ${path}`,
+        subtitle: scope === 'project'
+          ? 'Sending all .tex / .bib sources — larger projects take longer.'
+          : 'Sending the current file and your instruction.',
+        phases: scope === 'project' ? [
+          `Collecting project files for ${modelLabel()}…`,
+          'Uploading context to the model…',
+          'Model is planning multi-file edits…',
+          'Still writing — project-wide edits can take a few minutes…',
+          'Approaching timeout — try single-file mode for faster results…',
+        ] : [
+          `Reading ${path}…`,
+          `Sending to ${modelLabel()}…`,
+          'Model is rewriting your LaTeX…',
+          'Still generating — local models often need 30–90 seconds…',
+          'Approaching timeout — try a shorter instruction…',
+        ],
+      });
+      runBtn.textContent = 'Running…';
+      try {
+        const data = await runAiRequest('/api/ai_complete.php', payload, wait, [runBtn, testBtn, closeBtn, acceptBtn]);
+        pending = data;
+        const prev = backdrop.querySelector('#aiPreview');
+        prev.classList.remove('hidden');
+        if (data.mode === 'file') {
+          prev.innerHTML = `<h3>${esc(data.result.summary)}</h3><pre>${esc(data.result.content.slice(0, 8000))}</pre>`;
+          acceptBtn.classList.remove('hidden');
+        } else {
+          const names = Object.keys(data.result.files || {}).join(', ');
+          prev.innerHTML = `<h3>${esc(data.result.summary)}</h3><p>Files: ${esc(names)}</p>`;
+          for (const [fp, body] of Object.entries(data.result.files || {})) {
+            prev.innerHTML += `<h4>${esc(fp)}</h4><pre>${esc(String(body).slice(0, 4000))}</pre>`;
+          }
+          acceptBtn.classList.remove('hidden');
+        }
+        toast('AI suggestion ready — review and Accept', 'ok');
+      } catch (e) {
+        toast(e.message, e.message.includes('cancelled') ? '' : 'error');
+      } finally {
+        runBtn.textContent = 'Run';
+      }
+    };
+
+    backdrop.querySelector('#aiAccept').onclick = async () => {
+      if (!pending) return;
+      try {
+        await applyAiFileChanges(pending);
+        toast('AI changes applied', 'ok');
+        backdrop.remove();
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    };
+
+    backdrop.querySelector('#aiClose').onclick = () => backdrop.remove();
+  }
+
+  async function applyAiFileChanges(pending) {
+    if (pending.mode === 'file') {
+      const path = pending.result.path;
+      const content = pending.result.content;
+      if (state.editor && state.activePath === path && !state.editor.getOption('readOnly')) {
+        state.editor.setValue(content);
+        markDirtyFromEditor();
+        await saveActive('ai');
+      } else {
+        await api('/api/files.php?id=' + encodeURIComponent(state.project.id), {
+          method: 'PUT',
+          json: { path, content, source: 'ai' },
+        });
+        state.contents[path] = content;
+        if (state.activePath === path && state.editor) {
+          state.editor.setValue(content);
+        }
+      }
+    } else {
+      for (const [fp, content] of Object.entries(pending.result.files || {})) {
+        await api('/api/files.php?id=' + encodeURIComponent(state.project.id), {
+          method: 'PUT',
+          json: { path: fp, content, source: 'ai' },
+        });
+        state.contents[fp] = content;
+        if (fp === state.activePath && state.editor) {
+          state.editor.setValue(content);
+        }
+      }
+      const proj = await api('/api/project.php?id=' + encodeURIComponent(state.project.id));
+      state.files = proj.files || state.files;
+      renderFileList();
+    }
+    scheduleAutoCompile();
+  }
+
+  function showAiFixProblems(errors) {
+    if (!state.aiEnabled) {
+      toast('AI is not configured', 'error');
+      return;
+    }
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal modal-wide">
+        <h2>AI fix compile problems</h2>
+        <p class="ai-disclaimer"><strong>Alpha / experimental.</strong> Sends compile errors and affected files to your AI provider. Fixes are not guaranteed — quality depends on your model. Review every change before accepting.</p>
+        <div class="ai-error-list">${errors.map((d) => `
+          <div class="pill"><strong>${esc(d.severity)}</strong> ${esc(d.message)}
+          <span class="loc">${esc(d.file || state.project.mainFile)}${d.line ? ':' + d.line : ''}</span></div>`).join('')}</div>
+        <div id="aiFixWaitMount" class="ai-wait-mount hidden"></div>
+        <div id="aiFixPreview" class="ai-preview hidden"></div>
+        <div class="modal-actions">
+          <button type="button" id="aiFixRun" class="primary">Analyze &amp; suggest fix</button>
+          <button type="button" id="aiFixAccept" class="primary hidden">Accept fixes</button>
+          <button type="button" id="aiFixClose">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(backdrop);
+    let pending = null;
+    const waitMount = backdrop.querySelector('#aiFixWaitMount');
+    const runBtn = backdrop.querySelector('#aiFixRun');
+    const acceptBtn = backdrop.querySelector('#aiFixAccept');
+    const closeBtn = backdrop.querySelector('#aiFixClose');
+    const errFiles = [...new Set(errors.map((d) => d.file || state.project.mainFile).filter(Boolean))];
+
+    backdrop.querySelector('#aiFixRun').onclick = async () => {
+      const wait = createAiWait(waitMount, {
+        title: 'AI fixing compile errors',
+        subtitle: `Analyzing ${errors.length} error(s) in ${errFiles.length} file(s). AI is experimental — results depend on your model.`,
+        phases: [
+          'Gathering errors and affected source files from the last build…',
+          `Sending context to ${state.aiConfig?.model || 'the model'}…`,
+          'Model is diagnosing LaTeX errors and planning fixes…',
+          'Generating corrected file content — this often takes 1–3 minutes…',
+          'Approaching timeout — cancel and fix one file manually if needed…',
+        ],
+      });
+      runBtn.textContent = 'Analyzing…';
+      try {
+        const data = await runAiRequest(
+          '/api/ai_complete.php',
+          { projectId: state.project.id, mode: 'fix_problems' },
+          wait,
+          [runBtn, acceptBtn, closeBtn],
+        );
+        pending = data;
+        const prev = backdrop.querySelector('#aiFixPreview');
+        prev.classList.remove('hidden');
+        const names = Object.keys(data.result.files || {}).join(', ');
+        prev.innerHTML = `<h3>${esc(data.result.summary)}</h3><p>Files to update: ${esc(names)}</p>`;
+        if ((data.result.notes || []).length) {
+          prev.innerHTML += `<p>${esc(data.result.notes.join(' '))}</p>`;
+        }
+        for (const [fp, body] of Object.entries(data.result.files || {})) {
+          prev.innerHTML += `<h4>${esc(fp)}</h4><pre>${esc(String(body).slice(0, 4000))}</pre>`;
+        }
+        acceptBtn.classList.remove('hidden');
+        toast('Fix suggested — review and Accept', 'ok');
+      } catch (e) {
+        toast(e.message, e.message.includes('cancelled') ? '' : 'error');
+      } finally {
+        runBtn.textContent = 'Analyze & suggest fix';
+      }
+    };
+
+    backdrop.querySelector('#aiFixAccept').onclick = async () => {
+      if (!pending) return;
+      try {
+        await applyAiFileChanges(pending);
+        toast('Fixes applied — recompiling', 'ok');
+        backdrop.remove();
+        await compileNow(true);
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    };
+
+    backdrop.querySelector('#aiFixClose').onclick = () => backdrop.remove();
+  }
+
+  function historySourceLabel(source) {
+    const map = {
+      initial: 'Initial',
+      save: 'Saved',
+      compile: 'Compile',
+      ai: 'AI',
+      restore: 'Restore',
+      import: 'Import',
+    };
+    return map[source] || source;
+  }
+
+  function buildHistoryTreeRows(revisions) {
+    const byParent = new Map();
+    for (const r of revisions) {
+      const p = r.parentId == null ? 'root' : String(r.parentId);
+      if (!byParent.has(p)) byParent.set(p, []);
+      byParent.get(p).push(r);
+    }
+    const rows = [];
+    const walk = (parentKey, prefix) => {
+      const kids = byParent.get(parentKey) || [];
+      kids.forEach((r, i) => {
+        const last = i === kids.length - 1;
+        rows.push({
+          revision: r,
+          branch: prefix + (last ? '└─ ' : '├─ '),
+        });
+        const childPrefix = prefix + (last ? '   ' : '│  ');
+        walk(String(r.id), childPrefix);
+      });
+    };
+    walk('root', '');
+    return rows;
+  }
+
+  function renderDiffHunks(hunks) {
+    if (!hunks || !hunks.length) {
+      return '<p class="pill">No differences.</p>';
+    }
+    let html = '<div class="diff-view">';
+    for (const h of hunks) {
+      const cls = h.type === 'insert' ? 'diff-add' : h.type === 'delete' ? 'diff-del' : 'diff-ctx';
+      const sign = h.type === 'insert' ? '+' : h.type === 'delete' ? '-' : ' ';
+      html += `<div class="diff-line ${cls}"><span class="diff-sign">${sign}</span><span class="diff-text">${esc(h.text)}</span></div>`;
+    }
+    html += '</div>';
+    return html;
+  }
+
+  async function showHistory() {
+    const path = state.activePath;
+    if (!state.project || !path || isBinaryFile({ path })) {
+      toast('Open a text file to view history', 'error');
+      return;
+    }
+    if (!canEditProject(state.project) && state.project.role === 'view') {
+      // viewers can still browse history
+    }
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal modal-wide history-modal">
+        <h2>Version history</h2>
+        <p class="ai-disclaimer">Branching timeline like Vim undo tree. Pick a version, review the diff against current (or another version), then restore if needed. Restoring creates a new branch — nothing is deleted.</p>
+        <p class="pill">${esc(path)}</p>
+        <div class="history-layout">
+          <div class="history-tree-wrap">
+            <h3>Timeline</h3>
+            <div id="historyTree" class="history-tree">Loading…</div>
+          </div>
+          <div class="history-diff-wrap">
+            <div class="history-diff-toolbar">
+              <label>Compare</label>
+              <select id="historyCompare">
+                <option value="current">Current editor</option>
+              </select>
+            </div>
+            <div id="historyDiffMeta" class="pill"></div>
+            <div id="historyDiff" class="history-diff-body">Select a version to preview changes.</div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="historyRestore" class="primary" disabled>Restore this version</button>
+          <button type="button" id="historyClose">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(backdrop);
+
+    let revisions = [];
+    let selectedId = null;
+    let compareTo = 'current';
+
+    const treeEl = backdrop.querySelector('#historyTree');
+    const diffEl = backdrop.querySelector('#historyDiff');
+    const diffMeta = backdrop.querySelector('#historyDiffMeta');
+    const compareSel = backdrop.querySelector('#historyCompare');
+    const restoreBtn = backdrop.querySelector('#historyRestore');
+    if (!canEditProject(state.project)) {
+      restoreBtn.style.display = 'none';
+    }
+
+    function currentEditorContent() {
+      if (state.activePath === path && state.editor && !isBinaryFile({ path })) {
+        return state.editor.getValue();
+      }
+      return state.contents[path] ?? '';
+    }
+
+    function populateCompareOptions() {
+      const opts = ['<option value="current">Current editor</option>'];
+      for (const r of revisions) {
+        opts.push(`<option value="${r.id}">${esc(r.display)}</option>`);
+      }
+      compareSel.innerHTML = opts.join('');
+      compareSel.value = String(compareTo);
+    }
+
+    function renderTree() {
+      if (!revisions.length) {
+        treeEl.innerHTML = '<p class="pill">No saved versions yet. History begins on your next save or compile.</p>';
+        return;
+      }
+      const rows = buildHistoryTreeRows(revisions);
+      treeEl.innerHTML = rows.map(({ revision: r, branch }) => {
+        const active = r.id === selectedId ? ' active' : '';
+        const head = r.isHead ? ' <span class="history-head-tag">head</span>' : '';
+        return `<button type="button" class="history-node${active}" data-id="${r.id}">
+          <span class="history-branch">${esc(branch)}</span>
+          <span class="history-node-body">
+            <span class="history-node-title">${esc(r.display)}</span>
+            <span class="history-node-meta">${esc(historySourceLabel(r.source))}${head}</span>
+          </span>
+        </button>`;
+      }).join('');
+      treeEl.querySelectorAll('.history-node').forEach((btn) => {
+        btn.onclick = () => {
+          selectedId = Number(btn.getAttribute('data-id'));
+          renderTree();
+          loadDiff();
+        };
+      });
+    }
+
+    async function loadDiff() {
+      if (!selectedId) {
+        diffEl.textContent = 'Select a version to preview changes.';
+        diffMeta.textContent = '';
+        restoreBtn.disabled = true;
+        return;
+      }
+      const fromId = selectedId;
+      const to = compareSel.value;
+      if (String(fromId) === String(to)) {
+        diffEl.innerHTML = '<p class="pill">Choose a different comparison target.</p>';
+        diffMeta.textContent = '';
+        restoreBtn.disabled = true;
+        return;
+      }
+      diffEl.textContent = 'Loading diff…';
+      try {
+        const q = new URLSearchParams({
+          id: state.project.id,
+          path,
+          action: 'diff',
+          from: String(fromId),
+          to: String(to),
+        });
+        const data = await api('/api/history.php?' + q.toString());
+        diffMeta.textContent = `${data.from.display} → ${data.to.display}`;
+        diffEl.innerHTML = renderDiffHunks(data.hunks);
+        const head = revisions.find((r) => r.isHead);
+        restoreBtn.disabled = !canEditProject(state.project) || (head && head.id === selectedId && to === 'current' && !state.dirty[path]);
+      } catch (e) {
+        diffEl.textContent = e.message;
+        restoreBtn.disabled = true;
+      }
+    }
+
+    compareSel.onchange = () => {
+      compareTo = compareSel.value;
+      loadDiff();
+    };
+
+    restoreBtn.onclick = async () => {
+      if (!selectedId || !canEditProject(state.project)) return;
+      const rev = revisions.find((r) => r.id === selectedId);
+      if (!rev) return;
+      if (!confirm(`Restore "${rev.display}"?\n\nYour editor will be updated and a new branch point will be created.`)) {
+        return;
+      }
+      restoreBtn.disabled = true;
+      restoreBtn.textContent = 'Restoring…';
+      try {
+        const data = await api('/api/history.php?id=' + encodeURIComponent(state.project.id), {
+          method: 'POST',
+          json: { action: 'restore', path, revisionId: selectedId },
+        });
+        state.contents[path] = data.file.content ?? state.contents[path];
+        if (state.editor && state.activePath === path) {
+          state.editor.setValue(state.contents[path]);
+        }
+        state.dirty[path] = false;
+        toast('Restored — ' + (data.file.label || rev.display), 'ok');
+        const list = await api('/api/history.php?id=' + encodeURIComponent(state.project.id)
+          + '&path=' + encodeURIComponent(path) + '&action=list');
+        revisions = list.revisions || [];
+        selectedId = data.file.revisionId || selectedId;
+        populateCompareOptions();
+        renderTree();
+        await loadDiff();
+        scheduleAutoCompile();
+      } catch (e) {
+        toast(e.message, 'error');
+      } finally {
+        restoreBtn.disabled = false;
+        restoreBtn.textContent = 'Restore this version';
+      }
+    };
+
+    backdrop.querySelector('#historyClose').onclick = () => backdrop.remove();
+
+    try {
+      const list = await api('/api/history.php?id=' + encodeURIComponent(state.project.id)
+        + '&path=' + encodeURIComponent(path) + '&action=list');
+      revisions = list.revisions || [];
+      const head = revisions.find((r) => r.isHead);
+      selectedId = head ? head.id : (revisions.length ? revisions[revisions.length - 1].id : null);
+      populateCompareOptions();
+      renderTree();
+      await loadDiff();
+    } catch (e) {
+      treeEl.textContent = e.message;
+    }
+  }
+
   async function boot() {
     try {
       if (typeof CodeMirror === 'undefined') {
@@ -1156,6 +1940,8 @@
       state.authRequired = me.authRequired;
       state.providers = me.providers || [];
       state.oauthConfigured = me.oauthConfigured;
+      state.aiEnabled = !!me.aiEnabled;
+      state.aiConfig = me.aiConfig || null;
       renderTop();
 
       if (!state.user && state.authRequired) {

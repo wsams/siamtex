@@ -56,7 +56,12 @@ try {
         $body = stx_read_json();
         $path = (string) ($body['path'] ?? $path);
         $content = (string) ($body['content'] ?? '');
-        $meta = stx_projects()->writeFile($user, $id, $path, $content);
+        $source = (string) ($body['source'] ?? 'save');
+        if (!in_array($source, ['save', 'compile', 'ai', 'import', 'restore'], true)) {
+            $source = 'save';
+        }
+        $label = isset($body['label']) ? (string) $body['label'] : null;
+        $meta = stx_projects()->writeFile($user, $id, $path, $content, $source, $label);
         stx_json(['file' => $meta]);
     }
 

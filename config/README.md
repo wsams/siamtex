@@ -47,3 +47,5 @@ Set `SIAMTEX_OAUTH_BASE_URL` to the public base URL (no trailing slash). Until O
 ## Hardware
 
 Plan for **2 GB+ RAM** and **40 GB+ disk** if you expect regular compiles (TeX Live in Docker is sizable). See [SPECS.md](../SPECS.md) §6.2.
+
+**AI inference** does not run on the droplet by default. Provider recipes: [docs/ai-providers.md](../docs/ai-providers.md). **AI features are alpha/experimental** — accuracy depends on the chosen model.
