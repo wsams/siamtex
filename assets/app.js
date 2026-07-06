@@ -941,8 +941,8 @@
       }
       const wait = createAiWait(waitMount, {
         title: 'AI is creating your project',
-        streaming: false,
-        subtitle: 'Token usage updates below — cloud providers may bill per token.',
+        streaming: true,
+        subtitle: 'Raw JSON streams below as the model works (Ollama may buffer until near the end). Token counts update in parallel.',
         phases: [
           'Sending your prompt to the model…',
           'Planning document structure and files…',
@@ -2062,9 +2062,9 @@
       };
       const wait = createAiWait(waitMount, {
         title: scope === 'project' ? 'AI editing project' : `AI editing ${path}`,
-        streaming: scope === 'file',
+        streaming: true,
         subtitle: scope === 'project'
-          ? 'Multi-file edits use JSON mode — token counts update while the model works.'
+          ? 'Multi-file JSON streams below; token counts update in parallel.'
           : 'Live LaTeX output appears below; token usage updates as the model responds.',
         phases: scope === 'project' ? [
           `Collecting project files for ${modelLabel()}…`,
@@ -2193,8 +2193,8 @@
     backdrop.querySelector('#aiFixRun').onclick = async () => {
       const wait = createAiWait(waitMount, {
         title: 'AI fixing compile errors',
-        streaming: false,
-        subtitle: 'Token usage updates while the model generates JSON fix suggestions.',
+        streaming: true,
+        subtitle: 'Fix JSON streams below; token usage updates in parallel.',
         phases: [
           'Gathering errors and affected source files from the last build…',
           `Sending context to ${state.aiConfig?.model || 'the model'}…`,

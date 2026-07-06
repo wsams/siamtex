@@ -33,6 +33,11 @@ try {
     $sendUsage = static function (AiUsage $usage): void {
         stx_sse_send('progress', ['usage' => $usage->toPublicArray()]);
     };
+    $sendDelta = static function (string $text): void {
+        if ($text !== '') {
+            stx_sse_send('delta', ['text' => $text]);
+        }
+    };
 
     if ($mode === 'create_project') {
         $prompt = (string) ($body['prompt'] ?? $instruction);
@@ -45,6 +50,7 @@ try {
             $engine,
             static fn (string $message) => stx_sse_send('status', ['message' => $message]),
             $sendUsage,
+            $sendDelta,
             $abort,
         );
         stx_sse_send('done', [
@@ -74,6 +80,7 @@ try {
             $extra,
             static fn (string $message) => stx_sse_send('status', ['message' => $message]),
             $sendUsage,
+            $sendDelta,
             $abort,
         );
         stx_sse_send('done', [
@@ -95,6 +102,7 @@ try {
             $projectId,
             static fn (string $message) => stx_sse_send('status', ['message' => $message]),
             $sendUsage,
+            $sendDelta,
             $abort,
         );
         stx_sse_send('done', [

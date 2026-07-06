@@ -87,12 +87,14 @@ final class OpenAiCompatibleClient
         array $messages,
         callable $onUsage,
         ?callable $shouldAbort = null,
+        ?callable $onDelta = null,
     ): AiChatResult {
+        $delta = $onDelta ?? static function (): void {};
         return $this->streamRequest(
             $config,
             $messages,
             true,
-            static function (): void {},
+            $delta,
             $onUsage,
             $shouldAbort,
             $onUsage,

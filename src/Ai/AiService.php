@@ -213,6 +213,7 @@ final class AiService
         string $extraContext,
         callable $onStatus,
         callable $onUsage,
+        ?callable $onDelta = null,
         ?callable $shouldAbort = null,
     ): array {
         $instruction = trim($instruction);
@@ -255,6 +256,7 @@ final class AiService
                 $onUsage($u);
             },
             $shouldAbort,
+            $onDelta,
         );
         $meta = $this->finalizeUsage((int) $user['id'], 'edit_project', $projectId, $chat->usage);
 
@@ -269,6 +271,7 @@ final class AiService
         string $projectId,
         callable $onStatus,
         callable $onUsage,
+        ?callable $onDelta = null,
         ?callable $shouldAbort = null,
     ): array {
         $project = $this->projects->requireRole($user, $projectId, ['owner', 'edit']);
@@ -322,6 +325,7 @@ final class AiService
                 $onUsage($u);
             },
             $shouldAbort,
+            $onDelta,
         );
         $meta = $this->finalizeUsage((int) $user['id'], 'fix_problems', $projectId, $chat->usage);
 
@@ -338,6 +342,7 @@ final class AiService
         string $engine,
         callable $onStatus,
         callable $onUsage,
+        ?callable $onDelta = null,
         ?callable $shouldAbort = null,
     ): array {
         $prompt = trim($prompt);
@@ -360,6 +365,7 @@ final class AiService
                 $onUsage($u);
             },
             $shouldAbort,
+            $onDelta,
         );
         $parsed = AiResponseParser::parseNewProjectJson($chat->content);
         $onStatus('Creating project files…');
