@@ -37,7 +37,13 @@ function stx_compile(): CompileService
 function stx_ai(): \SiamTeX\Ai\AiService
 {
     static $a = null;
-    return $a ??= new \SiamTeX\Ai\AiService(stx_store(), stx_projects());
+    return $a ??= new \SiamTeX\Ai\AiService(stx_store(), stx_projects(), stx_ai_permissions());
+}
+
+function stx_ai_permissions(): \SiamTeX\AiPermissions
+{
+    static $p = null;
+    return $p ??= new \SiamTeX\AiPermissions(stx_store());
 }
 
 function stx_json(array $data, int $code = 200): void
@@ -102,6 +108,7 @@ function stx_public_user(?array $u): ?array
         'login' => $u['provider_login'],
         'avatarUrl' => $u['avatar_url'],
         'provider' => $u['provider'],
+        'isAdmin' => !empty($u['is_admin']),
     ];
 }
 

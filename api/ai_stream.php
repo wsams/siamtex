@@ -22,7 +22,7 @@ try {
     $mode = (string) ($body['mode'] ?? 'file');
     $instruction = (string) ($body['instruction'] ?? '');
 
-    if ($mode !== 'create_project' && $projectId === '') {
+    if ($mode !== 'create_project' && $mode !== 'chat' && $projectId === '') {
         stx_json(['error' => 'projectId is required'], 400);
     }
 
@@ -112,6 +112,33 @@ try {
                 'files' => $result['files'],
                 'notes' => $result['notes'],
             ],
+            'usage' => $result['usage'],
+            'usageTotals' => $result['usageTotals'],
+        ]);
+        exit;
+    }
+
+    if ($mode === 'chat') {
+        $messages = is_array($body['messages'] ?? null) ? $body['messages'] : [];
+        $context = is_array($body['context'] ?? null) ? $body['context'] : [];
+        $attachPaths = is_array($body['attachPaths'] ?? null) ? $body['attachPaths'] : [];
+        $attachPaths = array_values(array_filter(array_map('strval', $attachPaths)));
+        $selection = is_array($body['selection'] ?? null) ? $body['selection'] : null;
+        $result = $ai->generalChatStream(
+            $user,
+            $messages,
+            $context,
+            $projectId !== '' ? $projectId : null,
+            $attachPaths,
+            $selection,
+            $sendDelta,
+            $sendUsage,
+            $abort,
+        );
+        stx_sse_send('done', [
+            'mode' => 'chat',
+            'message' => $result['content'],
+            'attachedFiles' => $result['attachedFiles'] ?? [],
             'usage' => $result['usage'],
             'usageTotals' => $result['usageTotals'],
         ]);

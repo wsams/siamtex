@@ -2,7 +2,15 @@
 
 > **Alpha / experimental.** SiamTeX AI features are not production-grade. Results vary widely by model — a small local quantised model may hallucinate or return invalid JSON; cloud APIs are generally more reliable but still require human review. Tell operators to **always preview before Accept**.
 
-SiamTeX optional AI features (**AI assist**, **AI fix problems**) call a **Chat Completions** HTTP API (`POST …/chat/completions`). The PHP app proxies requests server-side — browsers never talk to the model host directly.
+SiamTeX optional AI features call a **Chat Completions** HTTP API (`POST …/chat/completions`). The PHP app proxies requests server-side — browsers never talk to the model host directly.
+
+| Feature | UI | Writes project files? | Permission flag |
+|---------|-----|----------------------|-----------------|
+| **AI chat** | Slide-out **Chat** panel | No — Q&A only; suggests copy-paste LaTeX | `chat` |
+| **AI assist** | Project **AI** drawer | Yes — after user **Accept** | `assist` |
+| **AI fix problems** | Problems → **AI fix problems** | Yes — after **Accept** | `fixErrors` |
+| **Create project** | Dashboard AI prompt | Creates new project on accept | `createProject` |
+| **BYOK / settings** | AI settings API / future UI | Stores encrypted user provider config | `settings` |
 
 **Two configuration layers:**
 
@@ -85,6 +93,9 @@ All go in `/etc/siamtex.env` (mode `640`, root:www-data). Loaded by PHP-FPM — 
 | `SIAMTEX_AI_TIMEOUT` | Optional | Default `180` seconds |
 | `SIAMTEX_AI_MAX_CONTEXT_CHARS` | Optional | Default `200000` |
 | `SIAMTEX_AI_MAX_CALLS_PER_HOUR` | Optional | Per-user rate limit (default `20`) |
+| `SIAMTEX_ADMIN_GITHUB_LOGINS` | Optional | Comma-separated GitHub usernames with **full AI access** and **AI access** admin UI to enable features for others |
+
+After setting admins, run `php scripts/sync-ai-admins.php` from the app root (or have each admin sign in once). **New users have all AI features disabled** until an admin enables them in **AI access**.
 
 Copy-paste blocks are in [config/siamtex.env.example](../config/siamtex.env.example).
 
@@ -224,7 +235,8 @@ Keys are encrypted at rest with the app master key. The UI may not expose a sett
 | Empty / invalid JSON response | Reasoning model without Ollama `format:json` | Use `SIAMTEX_AI_PROVIDER=ollama` (auto), or try OpenAI/Gemini |
 | Timeout | Slow home GPU or huge project | Raise `SIAMTEX_AI_TIMEOUT`; smaller scope |
 | HTTP 401 | Bad or missing API key | Rotate key in env |
-| Anthropic direct URL fails | Native API incompatible | Switch to OpenRouter or LiteLLM |
+| User sees no Chat / AI buttons | Permissions off by default | Admin enables features in **AI access**; or add login to `SIAMTEX_ADMIN_GITHUB_LOGINS` |
+| Admin has no **AI access** menu | Not in `SIAMTEX_ADMIN_GITHUB_LOGINS` or DB not synced | Set env; `php scripts/sync-ai-admins.php`; sign in again |
 
 ---
 

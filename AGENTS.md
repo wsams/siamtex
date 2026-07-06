@@ -79,6 +79,7 @@ Ask the human for anything missing before changing production config.
 | Server RAM / disk | ≥ 2 GB RAM, ≥ 40 GB disk | Warn if low |
 | **AI provider** (if any) | `none`, `ollama`, `openai`, `google`, `xai`, `openrouter`, `openai_compatible` | Ask — see [docs/ai-providers.md](./docs/ai-providers.md) |
 | **AI credentials** | API key or Tailscale/Ollama hostname | Human provides; write only to `/etc/siamtex.env` or per-user BYOK |
+| **AI administrators** | Comma-separated GitHub logins | Optional — `SIAMTEX_ADMIN_GITHUB_LOGINS`; grants full AI + **AI access** admin UI |
 
 **Defaults if unspecified:**
 
@@ -94,13 +95,15 @@ Ask the human for anything missing before changing production config.
 |-----------|------|
 | PHP app (`index.php`, `api/`, `src/`) | Web UI + JSON API |
 | SQLite (`data/siamtex.sqlite`) | Users, projects, build metadata — **gitignored** |
-| Encrypted blobs (`data/projects/`) | AES-256-GCM project files and PDFs — **gitignored** |
+| Encrypted blobs (`data/projects/`) | AES-256-GCM project files and PDFs (per-entry PDFs under `pdfs/`) — **gitignored** |
 | Docker TeX worker | Sandboxed `latexmk` compiles — **no host TeX install** |
 | `/etc/siamtex.env` | OAuth + optional AI keys — **never in git** |
 
-Compiles: PHP decrypts → temp dir → `docker run --network=none … latexmk` → encrypt PDF → wipe plaintext.
+Compiles: PHP decrypts → temp dir → `docker run --network=none … latexmk` → encrypt PDF → wipe plaintext. **Multiple compile entries:** each top-level `.tex` in the project root (e.g. `main.tex`, `cover-letter.tex`) may produce its own encrypted PDF; partials in subfolders are not compiled alone. Preview and problems follow the active entry.
 
-**Optional AI:** PHP proxies chat completions to the configured provider (Ollama, OpenAI, Gemini, Grok, OpenRouter, etc.). The UI uses **`api/ai_stream.php`** (Server-Sent Events) for live progress during assist and fix-problems; **`api/ai_complete.php`** remains a buffered JSON fallback. See [docs/ai-providers.md](./docs/ai-providers.md). Agents must ask which provider — do not assume home Ollama. **AI features are alpha/experimental;** set expectations that model choice drives accuracy. **Ollama:** single-file streaming uses plain LaTeX (no `format: json`); multi-file and fix-problems keep JSON mode and show status/char counts only.
+**Optional AI:** PHP proxies chat completions to the configured provider (Ollama, OpenAI, Gemini, Grok, OpenRouter, etc.). The UI uses **`api/ai_stream.php`** (Server-Sent Events) for live progress during assist, fix-problems, chat, and create-project; **`api/ai_complete.php`** remains a buffered JSON fallback. See [docs/ai-providers.md](./docs/ai-providers.md). Agents must ask which provider — do not assume home Ollama. **AI features are alpha/experimental;** set expectations that model choice drives accuracy. **Ollama:** single-file streaming uses plain LaTeX (no `format: json`); multi-file and fix-problems keep JSON mode and show status/char counts only.
+
+**AI access control (multi-user hosts):** new users have **all AI features off** until an administrator enables them. Set `SIAMTEX_ADMIN_GITHUB_LOGINS` (comma-separated GitHub usernames) in `/etc/siamtex.env`; those users get full AI access and the **AI access** admin panel. After env changes, run `php scripts/sync-ai-admins.php` (or sign in once so `auth_me.php` syncs). Features: `chat`, `createProject`, `assist`, `fixErrors`, `settings` (BYOK).
 
 ---
 
@@ -289,6 +292,14 @@ SIAMTEX_AUTH_REQUIRED=1
 
 Leave client ID/secret empty for **local solo mode** (single local user, no sign-in wall).
 
+**AI administrators (optional, multi-user):**
+
+```bash
+SIAMTEX_ADMIN_GITHUB_LOGINS=ownerlogin,otheradmin
+```
+
+Then `php scripts/sync-ai-admins.php` or have each admin sign in once. Admins enable per-user AI features in **AI access**; new users start with all AI off.
+
 Do **not** write secrets into the repo, `.env` in the web tree, or git.
 
 ### 7. PHP-FPM
@@ -405,6 +416,8 @@ See [SPECS.md](./SPECS.md) §5 (security requirements) for product-level constra
 | Screenshots accidentally in web root | Agent copied admin files into deploy path | Move to `docs/` or off-server; add deny rules; never commit private paths |
 | AI stream shows nothing until the end | Nginx/Apache buffering or `fastcgi_read_timeout` too low | Set `fastcgi_read_timeout` ≥ `SIAMTEX_AI_TIMEOUT` (default 120s); for Nginx add `fastcgi_buffering off` on `ai_stream.php` (see `config/nginx-siamtex.conf.example`); restart web server |
 | AI “curl extension required” | PHP curl not installed | `apt install php8.3-curl` (or your version); restart php-fpm |
+| User sees no AI UI after install | AI permissions off by default | Admin sets `SIAMTEX_ADMIN_GITHUB_LOGINS`, syncs admins, enables features in **AI access** |
+| Chat shows raw ` ```latex ` fences | Stale `assets/app.js` or marked failed to load | Hard-refresh; confirm `marked` + `DOMPurify` load in `index.php` |
 
 **Logs:** PHP-FPM journal, web server error log, compile output in the app’s build log panel.
 

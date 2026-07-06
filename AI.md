@@ -130,6 +130,33 @@ Same as above, but current files are mostly placeholders (“Your Name”, “Co
 
 Smaller scope: user selects text or a file and prompts (“Make this bullet more impactful”). Model returns a single-file patch or replacement for the active buffer.
 
+### 4.4 General AI chat (Q&A)
+
+Separate from structured edit tools:
+
+1. User opens the **Chat** slide-out (when permitted).  
+2. Asks questions in plain language; optional **`@mentions`** attach project files (`@main.tex`, `@active`, `@selection`).  
+3. Model replies in **Markdown**; fenced LaTeX blocks render as copyable code samples in the UI.  
+4. Chat does **not** write to the project — user copies suggestions or uses **AI assist** to apply edits.
+
+Requires the `chat` permission (or admin). Implemented via `api/ai_stream.php` mode `chat`.
+
+### 4.5 Create project from prompt
+
+Dashboard flow: natural-language description → model returns project file tree as JSON → user reviews → new encrypted project. Requires `createProject` permission.
+
+### 4.6 Per-user AI permissions
+
+| Flag | Feature |
+|------|---------|
+| `chat` | General Q&A panel |
+| `createProject` | AI new-project prompt |
+| `assist` | Structured AI edit drawer |
+| `fixErrors` | AI fix compile problems |
+| `settings` | Per-user BYOK (`api/ai_settings.php`) |
+
+**Default:** all off for new users. **Admins:** GitHub logins in `SIAMTEX_ADMIN_GITHUB_LOGINS` get full access and the **AI access** admin UI (`api/admin_ai_access.php`). Sync with `scripts/sync-ai-admins.php`.
+
 ---
 
 ## 5. Prompt / response contract
@@ -241,15 +268,17 @@ api/
   ai_settings.php
   ai_test.php                  # buffered connection test (unchanged for Ollama JSON ping)
   ai_complete.php              # buffered JSON fallback
-  ai_stream.php                # SSE: token stream (single file) + status/progress (multi-file)
+  ai_stream.php                # SSE: chat, assist, fix_problems, create_project
+  admin_ai_access.php          # per-user AI permission toggles (admin)
 ```
 
 **Streaming behavior (v1):**
 
 | Mode | Provider wire format | UI |
 |------|---------------------|-----|
+| **Chat** (`mode: chat`) | `stream: true`, Markdown prose | Slide-out panel; **marked** + **DOMPurify**; fenced code blocks with Copy |
 | Single-file assist | `stream: true`, plain LaTeX (Ollama **without** `format: json`) | Live token preview in progress dialog |
-| Whole project / fix problems | `stream: true` internally, Ollama keeps `format: json` | Status messages + received character count; full diff after `done` |
+| Whole project / fix problems / create project | `stream: true` internally, Ollama keeps `format: json` | Status messages + received character count; full diff after `done` |
 | Test connection | `stream: false`, Ollama `format: json` | Short buffered ping |
 
 The browser reads `text/event-stream` events: `status`, `delta`, `progress`, `done`, `error`. Parsed results still go through `AiResponseParser` before Accept.
@@ -258,8 +287,10 @@ The browser reads `text/event-stream` events: `status`, `delta`, `progress`, `do
 
 UI:
 
-- Settings page for provider  
+- Settings page for provider (BYOK when `settings` permission granted)  
 - Project **AI** drawer: scope, instruction, Run with live progress, diff viewer, Accept  
+- **Chat** panel: Q&A, `@file` attachments, Markdown rendering  
+- **AI access** admin: per-user feature toggles  
 
 Dependencies (Composer examples):
 
@@ -340,8 +371,11 @@ When implementing, add requirements along these lines:
 
 - Optional BYOK AI providers (Ollama / OpenAI-compatible / Anthropic)  
 - Resume/document assist with upload + multi-file apply via review  
+- General AI chat with Markdown rendering and `@file` context (no auto-write)  
+- Per-user AI permissions and env-configured administrators  
 - Encrypted storage of user API keys  
 - SSRF protections on custom base URLs  
+- Multiple compile entries (top-level `.tex` → separate PDFs) — see SPECS F-35–F-36  
 - No secrets or provider keys in the public git repo  
 
 ---

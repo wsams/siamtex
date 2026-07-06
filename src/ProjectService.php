@@ -87,8 +87,84 @@ SQL);
             'shareRole' => $p['share_role'] ?? null,
             'createdAt' => $p['created_at'],
             'updatedAt' => $p['updated_at'],
-            'hasPdf' => is_file($this->pdfPath($p['id'])),
+            'hasPdf' => $this->hasPdf($p['id'], (string) $p['main_file']),
+            'pdfEntries' => $this->listPdfEntries($p['id']),
         ];
+    }
+
+    /** Top-level .tex files that can be compiled as standalone documents. */
+    public static function isCompileEntry(string $path): bool
+    {
+        return preg_match('/\.tex$/i', $path) === 1 && !str_contains($path, '/');
+    }
+
+    public function pdfPath(string $id, string $texPath): string
+    {
+        $dir = $this->projectDir($id) . '/pdfs';
+        if (!is_dir($dir)) {
+            mkdir($dir, 0770, true);
+        }
+        return $dir . '/' . $this->pdfStorageKey($texPath) . '.pdf.enc';
+    }
+
+    private function pdfStorageKey(string $texPath): string
+    {
+        return rawurlencode(str_replace('\\', '/', $this->safePath($texPath)));
+    }
+
+    /** @return list<string> */
+    public function listPdfEntries(string $projectId): array
+    {
+        $out = [];
+        $dir = $this->projectDir($projectId) . '/pdfs';
+        if (is_dir($dir)) {
+            foreach (scandir($dir) ?: [] as $name) {
+                if (!str_ends_with($name, '.pdf.enc')) {
+                    continue;
+                }
+                $key = substr($name, 0, -strlen('.pdf.enc'));
+                $path = rawurldecode($key);
+                if ($path !== '') {
+                    $out[] = $path;
+                }
+            }
+        }
+        $legacy = $this->projectDir($projectId) . '/output.pdf.enc';
+        if (is_file($legacy)) {
+            $project = $this->getProject($projectId);
+            $main = (string) ($project['main_file'] ?? 'main.tex');
+            if (!in_array($main, $out, true)) {
+                $out[] = $main;
+            }
+        }
+        sort($out);
+        return $out;
+    }
+
+    public function hasPdf(string $projectId, string $texPath): bool
+    {
+        if (is_file($this->pdfPath($projectId, $texPath))) {
+            return true;
+        }
+        $project = $this->getProject($projectId);
+        $main = (string) ($project['main_file'] ?? 'main.tex');
+        if ($texPath === $main && is_file($this->projectDir($projectId) . '/output.pdf.enc')) {
+            return true;
+        }
+        return false;
+    }
+
+    public function resolveCompileEntry(array $project, ?string $requested): string
+    {
+        $main = (string) $project['main_file'];
+        $requested = $requested !== null && $requested !== '' ? $this->safePath($requested) : '';
+        if ($requested !== '' && self::isCompileEntry($requested)) {
+            $paths = array_column($this->listFiles((string) $project['id']), 'path');
+            if (in_array($requested, $paths, true)) {
+                return $requested;
+            }
+        }
+        return $main;
     }
 
     public function create(array $user, string $name, string $templateId = 'blank', string $engine = 'pdflatex'): array
@@ -177,11 +253,6 @@ SQL);
     public function projectDir(string $id): string
     {
         return Config::projectsDir() . '/' . $id;
-    }
-
-    public function pdfPath(string $id): string
-    {
-        return $this->projectDir($id) . '/output.pdf.enc';
     }
 
     public function listFiles(string $projectId): array
@@ -484,21 +555,29 @@ SQL);
         }
     }
 
-    public function storePdf(array $project, string $pdfBytes): void
+    public function storePdf(array $project, string $pdfBytes, string $texPath): void
     {
         $key = $this->projectKey($project);
-        $path = $this->pdfPath($project['id']);
+        $path = $this->pdfPath((string) $project['id'], $texPath);
         file_put_contents($path, Crypto::encrypt($key, $pdfBytes));
         chmod($path, 0660);
     }
 
-    public function readPdf(array $project): ?string
+    public function readPdf(array $project, string $texPath): ?string
     {
-        $path = $this->pdfPath($project['id']);
-        if (!is_file($path)) {
-            return null;
+        $id = (string) $project['id'];
+        $path = $this->pdfPath($id, $texPath);
+        if (is_file($path)) {
+            return Crypto::decrypt($this->projectKey($project), (string) file_get_contents($path));
         }
-        return Crypto::decrypt($this->projectKey($project), (string) file_get_contents($path));
+        $main = (string) ($project['main_file'] ?? 'main.tex');
+        if ($texPath === $main) {
+            $legacy = $this->projectDir($id) . '/output.pdf.enc';
+            if (is_file($legacy)) {
+                return Crypto::decrypt($this->projectKey($project), (string) file_get_contents($legacy));
+            }
+        }
+        return null;
     }
 
     public function enableShare(array $user, string $projectId, string $role = 'view'): array
@@ -581,11 +660,22 @@ SQL);
         return $this->publicProject($this->getProject($project['id']) + ['_role' => 'owner']);
     }
 
-    public function saveBuild(string $projectId, string $status, string $engine, ?int $exitCode, int $durationMs, string $log, array $diagnostics): int
-    {
-        $st = $this->store->pdo()->prepare('INSERT INTO builds (project_id, status, engine, exit_code, duration_ms, log_text, diagnostics_json, created_at) VALUES (?,?,?,?,?,?,?,?)');
+    public function saveBuild(
+        string $projectId,
+        string $entryFile,
+        string $status,
+        string $engine,
+        ?int $exitCode,
+        int $durationMs,
+        string $log,
+        array $diagnostics,
+    ): int {
+        $st = $this->store->pdo()->prepare(
+            'INSERT INTO builds (project_id, entry_file, status, engine, exit_code, duration_ms, log_text, diagnostics_json, created_at) VALUES (?,?,?,?,?,?,?,?,?)'
+        );
         $st->execute([
             $projectId,
+            $entryFile,
             $status,
             $engine,
             $exitCode,
@@ -597,16 +687,58 @@ SQL);
         return (int) $this->store->pdo()->lastInsertId();
     }
 
-    public function latestBuild(string $projectId): ?array
+    public function latestBuild(string $projectId, ?string $entryFile = null): ?array
     {
-        $st = $this->store->pdo()->prepare('SELECT * FROM builds WHERE project_id = ? ORDER BY id DESC LIMIT 1');
-        $st->execute([$projectId]);
+        if ($entryFile !== null && $entryFile !== '') {
+            $main = (string) ($this->getProject($projectId)['main_file'] ?? 'main.tex');
+            $st = $this->store->pdo()->prepare(
+                'SELECT * FROM builds WHERE project_id = ? AND COALESCE(NULLIF(entry_file, \'\'), ?) = ? ORDER BY id DESC LIMIT 1'
+            );
+            $st->execute([$projectId, $main, $entryFile]);
+        } else {
+            $st = $this->store->pdo()->prepare('SELECT * FROM builds WHERE project_id = ? ORDER BY id DESC LIMIT 1');
+            $st->execute([$projectId]);
+        }
         $row = $st->fetch();
         if (!$row) {
             return null;
         }
+        return $this->rowToBuild($row, $projectId);
+    }
+
+    /** @return array<string, array> */
+    public function latestBuildsByEntry(string $projectId): array
+    {
+        $main = (string) ($this->getProject($projectId)['main_file'] ?? 'main.tex');
+        $st = $this->store->pdo()->prepare(
+            'SELECT b.* FROM builds b
+             INNER JOIN (
+               SELECT COALESCE(NULLIF(entry_file, \'\'), ?) AS ef, MAX(id) AS max_id
+               FROM builds WHERE project_id = ? GROUP BY ef
+             ) latest ON b.id = latest.max_id'
+        );
+        $st->execute([$main, $projectId]);
+        $out = [];
+        foreach ($st->fetchAll() as $row) {
+            $entry = (string) ($row['entry_file'] ?? '');
+            if ($entry === '') {
+                $entry = $main;
+            }
+            $out[$entry] = $this->rowToBuild($row, $projectId);
+        }
+        return $out;
+    }
+
+    /** @param array<string, mixed> $row */
+    private function rowToBuild(array $row, ?string $projectId = null): array
+    {
+        $entry = (string) ($row['entry_file'] ?? '');
+        if ($entry === '' && $projectId !== null) {
+            $entry = (string) ($this->getProject($projectId)['main_file'] ?? 'main.tex');
+        }
         return [
             'id' => (int) $row['id'],
+            'entry' => $entry,
             'status' => $row['status'],
             'engine' => $row['engine'],
             'exitCode' => $row['exit_code'] !== null ? (int) $row['exit_code'] : null,

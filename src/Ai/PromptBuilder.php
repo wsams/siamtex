@@ -97,17 +97,65 @@ Compile diagnostics:
 
 Project files:{$bundle}
 
-Respond with a single JSON object only (no markdown fences, no prose before or after), shape:
-{"summary":"what you fixed","files":{"path.tex":"full corrected file content"},"notes":["optional notes"]}
-Include only files you changed. Each value must be the **complete** file content after your minimal fix.
-Escape backslashes in JSON strings (e.g. \\\\documentclass). Ensure the JSON is valid and closed.
-Common fixes: missing \\usepackage, wrong environment names, unescaped special characters, missing \\begin/\\end pairs.
+Respond with a single JSON object only (no markdown fences, no prose before or after).
+
+**Prefer search-and-replace** when the fix is small (typos, one missing brace, wrong command name). That keeps the response short and avoids token limits:
+{"summary":"what you fixed","replacements":{"path.tex":[{"old":"exact text to find","new":"replacement"}]},"notes":[]}
+Each "old" must match the file exactly once. Include enough context in "old" to be unique.
+
+Use full file content only when large parts of a file must change:
+{"summary":"what you fixed","files":{"path.tex":"full corrected file content"},"notes":[]}
+
+Include only files you changed. Escape backslashes in JSON strings (e.g. \\\\documentclass). Ensure the JSON is valid and closed.
+Common fixes: missing \\usepackage, wrong environment names (e.g. \\end{centering} → \\end{center}), unescaped special characters, missing \\begin/\\end pairs.
 TXT;
 
         return [
             ['role' => 'system', 'content' => self::systemPrompt($engine) . "\nYou fix LaTeX compile errors. Output must be one JSON object matching the requested shape."],
             ['role' => 'user', 'content' => $user],
         ];
+    }
+
+    /**
+     * @param list<array{role:string, content:string}> $messages
+     * @param array{projectName?:string, engine?:string, activeFile?:string} $context
+     * @param list<string> $attachedPaths
+     */
+    public static function generalChat(array $messages, array $context = [], array $attachedPaths = []): array
+    {
+        $ctx = '';
+        $parts = [];
+        if (!empty($context['projectName'])) {
+            $parts[] = 'Project: ' . $context['projectName'];
+        }
+        if (!empty($context['engine'])) {
+            $parts[] = 'LaTeX engine: ' . $context['engine'];
+        }
+        if (!empty($context['activeFile'])) {
+            $parts[] = 'Active file in editor: ' . $context['activeFile'];
+        }
+        if ($attachedPaths !== []) {
+            $parts[] = 'Files attached to this turn: ' . implode(', ', $attachedPaths);
+        }
+        if ($parts !== []) {
+            $ctx = "\n\nEditor context:\n" . implode("\n", $parts);
+        }
+
+        $system = <<<TXT
+You are a helpful assistant inside SiamTeX, a browser-based LaTeX editor.
+Answer questions clearly and conversationally. Format replies in **Markdown**: use headings, lists, and fenced code blocks (```latex ... ```) for LaTeX the user can copy.
+When project files are attached in the user message (inside <file path="..."> tags), read them and answer about their actual content — quote or adapt snippets from those files when helpful.
+Users attach files with @filename in chat (e.g. @main.tex, @active for the open file, @selection for highlighted text).
+You are not browsing the web and cannot modify files from this chat — suggest edits as copy-paste LaTeX only.
+This is general Q&A, not the structured JSON file-edit tool.
+Reply with the final answer only — do not narrate your planning or reasoning process.
+{$ctx}
+TXT;
+
+        return array_merge(
+            [['role' => 'system', 'content' => trim($system)]],
+            $messages,
+        );
     }
 
     public static function createProject(string $prompt, string $engine = 'pdflatex', string $nameHint = ''): array

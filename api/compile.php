@@ -22,7 +22,8 @@ try {
         }
     }
     $project = stx_projects()->requireRole($user, $id, ['owner', 'edit']);
-    $result = stx_compile()->compile($project);
+    $entry = (string) ($body['entry'] ?? $body['path'] ?? '');
+    $result = stx_compile()->compile($project, $entry !== '' ? $entry : null);
     stx_json($result);
 } catch (Throwable $e) {
     stx_http_error($e);

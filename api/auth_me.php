@@ -4,31 +4,52 @@ declare(strict_types=1);
 
 require __DIR__ . '/_bootstrap.php';
 
-use SiamTeX\Config;
 use SiamTeX\Ai\AiConfig;
+use SiamTeX\Config;
 
 try {
     $user = stx_current_user();
     if ($user === null && !Config::authRequired()) {
-        // Auto local session for solo installs without OAuth.
         $user = stx_require_user();
+    } elseif ($user !== null) {
+        stx_ai_permissions()->syncAdminFromLogin($user);
+        $user = stx_store()->loadUser((int) $user['id']) ?? $user;
     }
+
+    $serverAi = Config::aiEnabled();
+    $aiPermissions = null;
+    $isAdmin = false;
     $aiConfig = null;
-    $aiEnabled = Config::aiEnabled();
+    $aiEnabled = false;
+    $aiUsage = null;
+
     if ($user !== null) {
-        $cfg = stx_ai()->configForUser((int) $user['id']);
-        $aiEnabled = $cfg->enabled;
-        $aiConfig = $cfg->publicView();
-    } elseif ($aiEnabled) {
+        $uid = (int) $user['id'];
+        $isAdmin = !empty($user['is_admin']);
+        $aiPermissions = stx_ai_permissions()->forUser($uid);
+        $aiEnabled = $serverAi && !empty($aiPermissions['any']);
+        $aiUsage = stx_ai()->usageSummaryForUser($uid);
+
+        if ($aiEnabled) {
+            if (!empty($aiPermissions['settings'])) {
+                $aiConfig = stx_ai()->configForUser($uid)->publicView();
+            } else {
+                $aiConfig = AiConfig::fromEnv()->publicView();
+            }
+        }
+    } elseif ($serverAi) {
         $aiConfig = AiConfig::fromEnv()->publicView();
+        $aiEnabled = true;
     }
-    $aiUsage = $user !== null ? stx_ai()->usageSummaryForUser((int) $user['id']) : null;
+
     stx_json([
         'user' => stx_public_user($user),
         'authRequired' => Config::authRequired(),
         'providers' => stx_enabled_providers(),
         'oauthConfigured' => Config::githubClientId() !== '' && Config::githubClientSecret() !== '',
         'aiEnabled' => $aiEnabled,
+        'aiPermissions' => $aiPermissions,
+        'isAdmin' => $isAdmin,
         'aiConfig' => $aiConfig,
         'aiUsage' => $aiUsage,
     ]);

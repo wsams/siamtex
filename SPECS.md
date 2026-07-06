@@ -80,6 +80,8 @@ Rebuild SiamTeX as a beautiful, responsive, security-first LaTeX IDE in the brow
 | F-32 | Users can **see build logs**. |
 | F-33 | Errors from build logs must **bubble into the UI smartly**—structured diagnostics (file, line, message, severity), not only a plain log file view. Raw log remains available for power users. |
 | F-34 | Build pipeline should support common academic workflows (e.g., `pdflatex` / `xelatex` / `lualatex` and bibliography tools such as BibTeX/Biber as configured per project). |
+| F-35 | Projects may define **multiple standalone compile entries**: any **top-level** `.tex` file in the project root (no `/` in the path) may be compiled to its own PDF (e.g. `main.tex` + `cover-letter.tex` in a resume package). Partials in subfolders (e.g. `sections/header.tex`) are inputs only — not separate compile targets. |
+| F-36 | **Per-entry PDF preview:** the side-by-side preview, build log, and problems panel follow the **active compile entry** (the open top-level `.tex`, or the project `main_file` when editing partials/assets). Each entry stores its own encrypted PDF and latest build metadata. API: `POST /api/compile.php` with optional `entry`; `GET /api/pdf.php?entry=…`. |
 
 ### 3.5 Projects & Files
 
@@ -89,7 +91,7 @@ Rebuild SiamTeX as a beautiful, responsive, security-first LaTeX IDE in the brow
 | F-41 | Users can **import files into a project**. |
 | F-41a | Users can **upload** assets (images, PDF, text) into a project via the Add file dialog; binary assets are stored encrypted and materialized at compile time. |
 | F-42 | Users can **export and share projects** (downloadable archive and/or share links with access control). |
-| F-43 | Clear project model: root/main file, assets, bibliography sources, and build settings. |
+| F-43 | Clear project model: designated **main file** (default compile entry when no top-level `.tex` is active), auxiliary partials/assets, bibliography sources, build settings, and optional **multiple PDF outputs** per top-level entry (see F-35–F-36). |
 
 ### 3.6 Sharing & Collaboration
 
@@ -141,9 +143,15 @@ Rebuild SiamTeX as a beautiful, responsive, security-first LaTeX IDE in the brow
 
 | ID | Requirement |
 |----|-------------|
-| F-95 | Optional **BYOK / server-configured AI** for single-file edits, multi-file project edits, and compile-error fixes. Users must **review and accept** changes before they are written to the project. |
-| F-96 | Long-running AI jobs should show **live progress**: token streaming for single-file LaTeX edits; status messages and character counts for multi-file JSON responses (project edit, fix problems). |
+| F-95 | Optional **BYOK / server-configured AI** for structured project edits: single-file assist, multi-file project edits, compile-error fixes, and **create project from prompt**. Users must **review and accept** changes before they are written to the project (chat Q&A does not auto-write files). |
+| F-96 | Long-running AI jobs should show **live progress**: token streaming for single-file LaTeX edits; status messages and character counts for multi-file JSON responses (project edit, fix problems, create project). |
 | F-97 | AI traffic is proxied server-side (`api/ai_stream.php` SSE); the browser never calls the provider directly. Connection tests may use a short buffered request (`api/ai_test.php`). |
+| F-98 | **General AI chat** — a slide-out Q&A panel separate from structured **AI** edit tools. Conversational help; does not apply edits without explicit user action elsewhere. |
+| F-99 | Assistant chat replies render **Markdown** (headings, lists, inline code, fenced blocks). Fenced code blocks (e.g. ` ```latex `) show as styled samples with a **Copy** button; full replies may also be copied from the message header. Sanitize HTML output (e.g. DOMPurify) before injection. |
+| F-100 | In chat, users may attach project context with **`@mentions`**: `@filename.tex`, `@active` (open file), `@selection` (editor highlight). Server loads file contents into the prompt; attachments are shown as pills on the user message. |
+| F-101 | **Per-user AI permissions** (off by default for new users): `chat`, `createProject`, `assist`, `fixErrors`, `settings` (BYOK). Enforced server-side on every AI endpoint. UI hides unavailable features. |
+| F-102 | **Administrators** — GitHub logins listed in `SIAMTEX_ADMIN_GITHUB_LOGINS` receive full AI access and an **AI access** admin UI to toggle permissions per user (`api/admin_ai_access.php`). Apply env changes with `scripts/sync-ai-admins.php` when needed. |
+| F-103 | **Token usage** — track AI token consumption per user and per project; surface summaries in the dashboard, project workspace, and chat panel. |
 
 ---
 
@@ -164,6 +172,7 @@ Rebuild SiamTeX as a beautiful, responsive, security-first LaTeX IDE in the brow
 | S-11 | The application source may be a **public git repository**. **No personal information**, secrets, OAuth credentials, encryption keys, or user document data may live in the repo. |
 | S-12 | Runtime config and secrets live **outside the web tree** (e.g. `/etc/siamtex.env`) or in gitignored `data/`. Ship only `.env.example` (placeholders) in git. |
 | S-13 | The web server must **deny HTTP access** to `.git/` trees, `.gitignore`, `.gitattributes`, `.gitmodules`, `.env` and variants, `vendor/`, and `data/` under the app. |
+| S-14 | **AI access control:** non-admin users start with all AI features disabled until granted by an administrator; admin GitHub logins are env-configured, not hard-coded in source. |
 
 ### Encryption notes (implementation guidance)
 
@@ -196,9 +205,10 @@ These are recommended defaults; adjust during implementation as needed.
 | Backend | PHP (current stable), Composer, thin HTTP API + server-rendered or SPA shell |
 | Auth | GitHub OAuth 2.0 / OpenID-style flow via a maintained OAuth library |
 | Frontend editor | CodeMirror (LaTeX/stex mode) with a **beginner insert toolbar**; textarea fallback if CM fails to load |
-| Metadata DB | SQLite (`data/siamtex.sqlite`, gitignored) for users, projects, memberships, builds |
-| PDF preview | PDF.js in a side pane |
-| Real-time compile | Debounced save → job queue → worker → encrypted artifact → preview refresh (WebSocket or SSE optional) |
+| Chat Markdown | **marked** + **DOMPurify** in the app shell for assistant chat rendering (fenced code blocks with copy affordances) |
+| Metadata DB | SQLite (`data/siamtex.sqlite`, gitignored) for users, projects, memberships, builds, AI permissions, usage |
+| PDF preview | iframe via `api/pdf.php` (per compile entry); legacy single `output.pdf.enc` supported for main file |
+| Real-time compile | Debounced save → compile active **entry** (`main.tex`, `cover-letter.tex`, …) → encrypted per-entry PDF → preview refresh |
 | Optional AI streaming | `api/ai_stream.php` (SSE proxy to provider); requires PHP **curl** extension; web server must not buffer long responses |
 | Storage | Local encrypted disk first; abstract the blob layer so S3-compatible storage can be added later |
 | Compile | **Dockerized TeX worker** (see §6.1), no outbound network, timeouts and ulimits |
@@ -248,19 +258,23 @@ TeX Live medium images are typically **~1.5–3 GB** on disk; a single compile c
 1. **Sign in with GitHub** → land on project dashboard.  
 2. **Create project** from blank or template (resume / homework / article).  
 3. **Edit** main and auxiliary files with syntax highlighting.  
-4. **Auto or manual compile** → PDF updates side-by-side; diagnostics appear in editor and problems panel.  
+4. **Auto or manual compile** → PDF updates side-by-side for the **active top-level `.tex`**; diagnostics appear in editor and problems panel. Resume projects may compile `cover-letter.tex` separately from `main.tex`.  
 5. **Manage bibliography** via smart UI; insert citations.  
 6. **Import** files or **export** project archive.  
 7. **Share** project with another user or link (permissioned).  
 8. Use **author tools** (margins, page estimates, converters) as needed.  
-9. Browse **templates / macros catalog** to extend the project.
+9. Browse **templates / macros catalog** to extend the project.  
+10. Optional: **AI chat** for Q&A with `@file` context; **AI assist** / **fix problems** with review-before-accept (when enabled by admin).
 
 ---
 
 ## 8. UI Structure (Indicative)
 
-- **Dashboard:** projects, templates, recent activity.  
-- **Project workspace:** file tree | editor | PDF preview; problems panel + build log drawer.  
+- **Dashboard:** projects, templates, recent activity; optional **create project from AI prompt**; token usage summary.  
+- **Project workspace:** file tree (📄 marks compile entries, ✓ when PDF built) | editor | PDF preview (label shows active entry); problems panel + build log drawer.  
+- **AI chat panel** (when permitted): Markdown replies, `@file` attachments, copy on code blocks and full messages.  
+- **Structured AI** drawer: assist, fix problems (when permitted).  
+- **AI access** admin (operators): per-user feature toggles.  
 - **Share / export** modals.  
 - **Bibliography** panel.  
 - **Tools** panel (geometry, estimators, converters).  
@@ -313,6 +327,9 @@ TeX Live medium images are typically **~1.5–3 GB** on disk; a single compile c
 | TeX install model | **Containerized worker** via Docker Compose — not bare-metal TeX on the host. |
 | Public repository | Source may be public; secrets and `data/` never committed; Apache blocks `.git` / `.env` / `.gitignore` over HTTP. |
 | Beginner toolbar | Insert buttons for text, structure, math, resume snippets; selection-aware wrap. |
+| Multi-PDF | Top-level `.tex` files compile to separate encrypted PDFs; preview follows active entry. |
+| AI permissions | Off by default for new users; admins via `SIAMTEX_ADMIN_GITHUB_LOGINS`; granular feature flags. |
+| AI chat | Q&A panel with Markdown + copyable code blocks; separate from structured edit tools. |
 
 ---
 
@@ -326,7 +343,7 @@ TeX Live medium images are typically **~1.5–3 GB** on disk; a single compile c
 | 4 | Sign-in via GitHub auth | F-10–F-13 |
 | 5 | Rich/syntax-highlighted editor; compile errors | F-20–F-23, F-33 |
 | 6 | Share documents | F-50–F-52 |
-| 7 | Side-by-side PDF, real time | F-30–F-31 |
+| 7 | Side-by-side PDF, real time; multiple top-level compile entries | F-30–F-31, F-35–F-36 |
 | 8 | Bibliographies + smart UI | F-60–F-61 |
 | 9 | Extra TeX files per project | F-40, F-43 |
 | 10 | Online macros/templates collection | F-71–F-72 |
@@ -341,7 +358,9 @@ TeX Live medium images are typically **~1.5–3 GB** on disk; a single compile c
 | 19 | Security throughout | S-01–S-10 |
 | 20 | Beautiful, responsive UI | F-91, N-01 |
 | 21 | Best judgment & current best practices | §6, F-04–F-05, N-05–N-06 |
+| 22 | Optional AI chat, permissions, usage tracking | F-95–F-103, S-14 |
+| 23 | Multiple PDFs per project (e.g. resume + cover letter) | F-35–F-36, F-43 |
 
 ---
 
-*Document version: 1.2 — multi-file template packages, common-file picker, TeX package set for templates.*
+*Document version: 1.3 — multi-entry PDF compile, AI chat (Markdown + @mentions), per-user AI permissions, admin access control.*

@@ -57,10 +57,12 @@ final class OpenAiCompatibleClient
             throw new RuntimeException($msg !== '' ? $msg : 'AI provider returned HTTP ' . $code);
         }
 
+        $choice = $data['choices'][0] ?? [];
+        $finish = (string) ($choice['finish_reason'] ?? '');
         $content = $this->extractMessageContent($data);
         $usage = AiUsage::fromProviderJson($data) ?? AiUsage::estimateFromMessages($messages, $content);
 
-        return new AiChatResult($content, $usage);
+        return new AiChatResult($content, $usage, $finish !== '' ? $finish : null);
     }
 
     /**
@@ -152,6 +154,7 @@ final class OpenAiCompatibleClient
         $fullContent = '';
         $fullReasoning = '';
         $usage = new AiUsage();
+        $finishReason = null;
         $httpCode = 0;
         $curlError = '';
         $lastProgressAt = 0.0;
@@ -183,6 +186,7 @@ final class OpenAiCompatibleClient
                 &$lineBuffer,
                 &$fullContent,
                 &$fullReasoning,
+                &$finishReason,
                 $onDelta,
                 $shouldAbort,
                 $emitUsage,
@@ -197,6 +201,9 @@ final class OpenAiCompatibleClient
                     $piece = $this->parseSseDataLine($line);
                     if ($piece === null) {
                         continue;
+                    }
+                    if (!empty($piece['finish'])) {
+                        $finishReason = (string) $piece['finish'];
                     }
                     if (($piece['usage'] ?? null) instanceof AiUsage) {
                         $emitUsage($piece['usage']);
@@ -249,11 +256,11 @@ final class OpenAiCompatibleClient
         $onProgress?->__invoke($usage);
         $onUsage?->__invoke($usage);
 
-        return new AiChatResult($content, $usage);
+        return new AiChatResult($content, $usage, $finishReason);
     }
 
     /**
-     * @return array{content:string, reasoning:string, usage:?AiUsage}|null
+     * @return array{content:string, reasoning:string, usage:?AiUsage, finish:string}|null
      */
     private function parseSseDataLine(string $line): ?array
     {
@@ -268,14 +275,13 @@ final class OpenAiCompatibleClient
         if (!is_array($json)) {
             return null;
         }
-        $delta = $json['choices'][0]['delta'] ?? [];
-        if (!is_array($delta)) {
-            $delta = [];
-        }
+        $choice = $json['choices'][0] ?? [];
+        $delta = is_array($choice['delta'] ?? null) ? $choice['delta'] : [];
         return [
             'content' => (string) ($delta['content'] ?? ''),
             'reasoning' => (string) ($delta['reasoning'] ?? ''),
             'usage' => AiUsage::fromProviderJson($json),
+            'finish' => (string) ($choice['finish_reason'] ?? ''),
         ];
     }
 

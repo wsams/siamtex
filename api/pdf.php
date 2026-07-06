@@ -41,7 +41,13 @@ try {
         $project = $projects->requireRole($user, $id, ['owner', 'edit', 'view']);
     }
 
-    $pdf = $projects->readPdf($project);
+    $entry = (string) ($_GET['entry'] ?? $_GET['path'] ?? '');
+    if ($entry === '') {
+        $entry = (string) ($project['main_file'] ?? 'main.tex');
+    }
+    $entry = $projects->resolveCompileEntry($project, $entry !== '' ? $entry : null);
+
+    $pdf = $projects->readPdf($project, $entry);
     if ($pdf === null) {
         http_response_code(404);
         header('Content-Type: text/plain');
@@ -49,8 +55,9 @@ try {
         exit;
     }
 
+    $downloadName = preg_replace('/\.tex$/i', '', $entry) . '.pdf';
     header('Content-Type: application/pdf');
-    header('Content-Disposition: inline; filename="project.pdf"');
+    header('Content-Disposition: inline; filename="' . $downloadName . '"');
     header('Cache-Control: private, no-store');
     header('X-Content-Type-Options: nosniff');
     echo $pdf;

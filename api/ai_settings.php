@@ -5,9 +5,12 @@ declare(strict_types=1);
 require __DIR__ . '/_bootstrap.php';
 
 use SiamTeX\Ai\AiConfig;
+use SiamTeX\AiPermissions;
 
 try {
     $user = stx_require_user();
+    $perms = stx_ai_permissions();
+    $perms->assert((int) $user['id'], AiPermissions::SETTINGS);
     $ai = stx_ai();
     $config = $ai->configForUser((int) $user['id']);
 

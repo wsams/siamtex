@@ -10,6 +10,8 @@
     providers: [],
     oauthConfigured: false,
     aiEnabled: false,
+    aiPermissions: null,
+    isAdmin: false,
     aiConfig: null,
     aiUsage: null,
     projects: [],
@@ -21,6 +23,7 @@
     dirty: {},
     contents: {},
     build: null,
+    buildsByEntry: {},
     problemsTab: 'problems',
     shareToken: null,
     editor: null,
@@ -28,6 +31,11 @@
     editorVim: localStorage.getItem('siamtex_editor_vim') === '1',
     autoTimer: null,
     compiling: false,
+    chatOpen: false,
+    chatMessages: [],
+    chatBusy: false,
+    chatAbort: null,
+    chatMentionIdx: -1,
   };
 
   const $main = () => document.getElementById('main');
@@ -455,6 +463,706 @@
     }
   }
 
+  /* ---------- General AI chat panel (Open WebUI–style Q&A) ---------- */
+
+  let aiChatMounted = false;
+
+  function chatStorageKey() {
+    const id = state.project?.id;
+    return `siamtex_chat_${id || 'home'}`;
+  }
+
+  function loadChatHistory() {
+    try {
+      const raw = localStorage.getItem(chatStorageKey());
+      const data = raw ? JSON.parse(raw) : [];
+      state.chatMessages = Array.isArray(data) ? data.filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content) : [];
+    } catch {
+      state.chatMessages = [];
+    }
+  }
+
+  function saveChatHistory() {
+    try {
+      localStorage.setItem(chatStorageKey(), JSON.stringify(state.chatMessages.slice(-40)));
+    } catch {
+      /* quota */
+    }
+  }
+
+  function chatContextPayload() {
+    const ctx = {};
+    if (state.project) {
+      ctx.projectName = state.project.name || '';
+      ctx.engine = state.project.engine || '';
+      if (state.activePath) ctx.activeFile = state.activePath;
+    }
+    return ctx;
+  }
+
+  function chatContextLabel() {
+    if (!state.project) return 'General questions';
+    const parts = [state.project.name];
+    if (state.activePath) parts.push(state.activePath);
+    return parts.join(' · ');
+  }
+
+  function chatAttachableFiles() {
+    if (!state.project) return [];
+    return (state.files || [])
+      .filter((f) => !/\.(png|jpe?g|gif|webp|bmp|tiff?|ico|svgz|pdf|eps|ps|ai|otf|ttf|ttc|woff2?|pfb|pfm|afm|tfm|vf|pk|gf|mf|map|enc)$/i.test(f.path || ''))
+      .map((f) => f.path)
+      .filter(Boolean);
+  }
+
+  function resolveChatMentionToken(token) {
+    const raw = String(token || '').trim();
+    if (!raw) return null;
+    const lower = raw.toLowerCase();
+    if (['active', 'current', '.'].includes(lower)) {
+      return state.activePath || state.project?.mainFile || null;
+    }
+    if (lower === 'selection') return 'selection';
+    const paths = chatAttachableFiles();
+    if (paths.includes(raw)) return raw;
+    const byBase = paths.find((p) => p === raw || p.endsWith('/' + raw) || p.split('/').pop() === raw);
+    return byBase || null;
+  }
+
+  function parseChatMentions(text) {
+    const attachSet = new Set();
+    const re = /@([a-zA-Z0-9_.\/-]+)/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const resolved = resolveChatMentionToken(m[1]);
+      if (resolved && resolved !== 'selection') attachSet.add(resolved);
+    }
+    const wantsSelection = /@selection\b/i.test(text);
+    return {
+      text: text.trim(),
+      attachPaths: [...attachSet],
+      wantsSelection,
+    };
+  }
+
+  function chatSelectionPayload(wantsSelection) {
+    if (!wantsSelection || !state.editor) return null;
+    const text = state.editor.getSelection();
+    if (!text || !String(text).trim()) return null;
+    return { path: state.activePath || state.project?.mainFile || 'editor', text: String(text) };
+  }
+
+  function formatChatUserText(text) {
+    return esc(text)
+      .replace(/@([a-zA-Z0-9_.\/-]+)/g, '<span class="ai-chat-mention">@$1</span>')
+      .replace(/\n/g, '<br>');
+  }
+
+  let chatMarkdownReady = false;
+  let chatStreamRenderTimer = null;
+
+  function normalizeChatMarkdown(text) {
+    return String(text ?? '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\u2018|\u2019/g, "'")
+      .replace(/\u201c|\u201d/g, '"')
+      .replace(/\\`\\`\\`/g, '```');
+  }
+
+  /** If the model wraps the whole reply in ```markdown … ```, peel it off. */
+  function unwrapOuterChatFence(text) {
+    let t = String(text ?? '').trim();
+    for (let i = 0; i < 2; i++) {
+      const m = t.match(/^```([a-zA-Z0-9_-]*)\s*\n([\s\S]*?)\n```\s*$/);
+      if (!m) break;
+      const lang = (m[1] || '').toLowerCase();
+      const inner = m[2];
+      if (['markdown', 'md', 'text', ''].includes(lang)) {
+        t = inner.trim();
+        continue;
+      }
+      break;
+    }
+    return t;
+  }
+
+  /** Split assistant text into prose and fenced code segments (more forgiving than marked alone). */
+  function splitChatMarkdown(text) {
+    const src = unwrapOuterChatFence(normalizeChatMarkdown(text));
+    const parts = [];
+    const re = /```([a-zA-Z0-9+_.-]*)\s*\n([\s\S]*?)```/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      if (m.index > last) {
+        parts.push({ type: 'text', content: src.slice(last, m.index) });
+      }
+      parts.push({ type: 'code', lang: m[1] || 'text', content: m[2].replace(/\s+$/, '') });
+      last = m.index + m[0].length;
+    }
+    if (last < src.length) {
+      parts.push({ type: 'text', content: src.slice(last) });
+    }
+    if (!parts.length) parts.push({ type: 'text', content: src });
+    return parts;
+  }
+
+  function renderChatCodeBlock(lang, code) {
+    const language = esc((lang || 'text').split(/\s+/)[0] || 'text');
+    const body = esc(String(code ?? '').replace(/\n$/, ''));
+    return `<div class="ai-chat-code-wrap"><div class="ai-chat-code-head"><span class="ai-chat-code-lang">${language}</span><button type="button" class="ghost ai-chat-code-copy" title="Copy code">Copy</button></div><pre class="ai-chat-code"><code>${body}</code></pre></div>`;
+  }
+
+  function initChatMarkdown() {
+    if (chatMarkdownReady || typeof marked === 'undefined') return typeof marked !== 'undefined';
+    marked.setOptions({
+      breaks: true,
+      gfm: true,
+      headerIds: false,
+      mangle: false,
+    });
+    chatMarkdownReady = true;
+    return true;
+  }
+
+  function sanitizeChatHtml(html) {
+    if (typeof DOMPurify === 'undefined') return html;
+    return DOMPurify.sanitize(html, {
+      ADD_TAGS: ['button'],
+      ADD_ATTR: ['class', 'type', 'title'],
+    });
+  }
+
+  function renderChatMarkdownInner(text) {
+    const parts = splitChatMarkdown(text);
+    const hasCode = parts.some((p) => p.type === 'code');
+    if (!hasCode && typeof marked !== 'undefined' && initChatMarkdown()) {
+      return sanitizeChatHtml(marked.parse(unwrapOuterChatFence(normalizeChatMarkdown(text))));
+    }
+    let html = '';
+    for (const part of parts) {
+      if (part.type === 'code') {
+        html += renderChatCodeBlock(part.lang, part.content);
+        continue;
+      }
+      const chunk = String(part.content ?? '').trim();
+      if (!chunk) continue;
+      if (typeof marked !== 'undefined' && initChatMarkdown()) {
+        html += sanitizeChatHtml(marked.parse(chunk));
+      } else {
+        html += formatChatUserText(chunk);
+      }
+    }
+    return html || formatChatUserText(String(text ?? ''));
+  }
+
+  function formatChatMessageBody(text, role) {
+    if (role === 'assistant') {
+      const inner = renderChatMarkdownInner(text);
+      return `<div class="ai-chat-md">${inner}</div>`;
+    }
+    return formatChatUserText(text);
+  }
+
+  function renderChatMarkdown(text) {
+    return formatChatMessageBody(text, 'assistant');
+  }
+
+  function fillChatMessageBody(bodyEl, content, streaming) {
+    if (!bodyEl) return;
+    bodyEl.classList.toggle('ai-chat-msg-streaming', !!streaming);
+    bodyEl.innerHTML = formatChatMessageBody(content, 'assistant');
+    wireChatMessageBody(bodyEl);
+  }
+
+  function scheduleChatStreamRender(bodyEl, mount, content) {
+    if (!bodyEl) return;
+    clearTimeout(chatStreamRenderTimer);
+    chatStreamRenderTimer = setTimeout(() => {
+      fillChatMessageBody(bodyEl, content, true);
+      if (mount) mount.scrollTop = mount.scrollHeight;
+    }, 60);
+  }
+
+  function flushChatStreamRender(bodyEl, mount, content) {
+    clearTimeout(chatStreamRenderTimer);
+    chatStreamRenderTimer = null;
+    if (!bodyEl) return;
+    fillChatMessageBody(bodyEl, content, false);
+    if (mount) mount.scrollTop = mount.scrollHeight;
+  }
+
+  function wireChatMessageBody(root) {
+    root?.querySelectorAll('.ai-chat-code-copy').forEach((btn) => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', async () => {
+        const pre = btn.closest('.ai-chat-code-wrap')?.querySelector('pre');
+        const t = pre?.textContent || '';
+        const label = btn.textContent;
+        try {
+          await navigator.clipboard.writeText(t);
+          btn.textContent = 'Copied!';
+          setTimeout(() => { btn.textContent = label || 'Copy'; }, 1600);
+        } catch {
+          toast('Could not copy', 'error');
+        }
+      });
+    });
+    root?.querySelectorAll('.ai-chat-msg-copy').forEach((btn) => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', async () => {
+        const msg = btn.closest('.ai-chat-msg');
+        const t = msg?.querySelector('.ai-chat-msg-body')?.innerText || '';
+        const label = btn.textContent;
+        try {
+          await navigator.clipboard.writeText(t.trim());
+          btn.textContent = 'Copied!';
+          setTimeout(() => { btn.textContent = label || 'Copy'; }, 1600);
+        } catch {
+          toast('Could not copy', 'error');
+        }
+      });
+    });
+  }
+
+  /** @deprecated use formatChatMessageBody */
+  function formatChatBubble(text) {
+    return formatChatUserText(text);
+  }
+
+  function renderChatAttachedPills(paths) {
+    if (!paths?.length) return '';
+    return `<div class="ai-chat-attached">${paths.map((p) => (
+      `<span class="ai-chat-file-pill" title="Attached for this message">${esc(p)}</span>`
+    )).join('')}</div>`;
+  }
+
+  function renderAiChatMessages() {
+    const mount = document.getElementById('aiChatMessages');
+    if (!mount) return;
+    if (!state.chatMessages.length) {
+      const fileHint = state.project
+        ? '<p class="ai-chat-empty-hint">In a project, type <code>@main.tex</code> or <code>@active</code> to attach file contents. Use <code>@selection</code> for highlighted editor text.</p>'
+        : '<p class="ai-chat-empty-hint">Open a project to attach files with <code>@filename</code>.</p>';
+      mount.innerHTML = `<div class="ai-chat-empty">
+        <p>Chat with your configured model — Ollama, OpenAI, or another provider.</p>
+        ${fileHint}
+        <p class="ai-chat-empty-hint">Separate from the structured <strong>AI</strong> edit tools — this is Q&amp;A with optional project context.</p>
+      </div>`;
+      return;
+    }
+    mount.innerHTML = state.chatMessages.map((m) => `
+      <div class="ai-chat-msg ai-chat-msg-${m.role === 'user' ? 'user' : 'assistant'}">
+        <div class="ai-chat-msg-role">${m.role === 'user' ? 'You' : 'Assistant'}${m.role === 'assistant' && m.content ? '<button type="button" class="ghost ai-chat-msg-copy" title="Copy reply">Copy</button>' : ''}</div>
+        ${m.role === 'user' ? renderChatAttachedPills(m.attachedFiles) : ''}
+        <div class="ai-chat-msg-body">${formatChatMessageBody(m.content, m.role)}</div>
+      </div>`).join('');
+    mount.scrollTop = mount.scrollHeight;
+    wireChatMessageBody(mount);
+  }
+
+  function setAiChatBusy(busy) {
+    state.chatBusy = busy;
+    const sendBtn = document.getElementById('aiChatSend');
+    const stopBtn = document.getElementById('aiChatStop');
+    const input = document.getElementById('aiChatInput');
+    if (sendBtn) sendBtn.disabled = busy;
+    if (input) input.disabled = busy;
+    if (stopBtn) stopBtn.classList.toggle('hidden', !busy);
+    document.getElementById('aiChatPanel')?.classList.toggle('ai-chat-busy', busy);
+  }
+
+  function toggleAiChatPanel(forceOpen) {
+    if (!hasAiChat() || !aiChatMounted) return;
+    const open = forceOpen !== undefined ? !!forceOpen : !state.chatOpen;
+    state.chatOpen = open;
+    const panel = document.getElementById('aiChatPanel');
+    const fab = document.getElementById('aiChatFab');
+    panel?.classList.toggle('open', open);
+    panel?.toggleAttribute('hidden', !open);
+    fab?.classList.toggle('open', open);
+    fab?.setAttribute('aria-expanded', open ? 'true' : 'false');
+    try { localStorage.setItem('siamtex_chat_open', open ? '1' : '0'); } catch { /* */ }
+    if (open) {
+      loadChatHistory();
+      renderAiChatMessages();
+      updateAiChatChrome();
+      document.getElementById('aiChatInput')?.focus();
+    }
+  }
+
+  function updateAiChatChrome() {
+    const modelEl = document.getElementById('aiChatModel');
+    const ctxEl = document.getElementById('aiChatContext');
+    const attachBtn = document.getElementById('aiChatAttachActive');
+    const hintEl = document.getElementById('aiChatComposeHint');
+    if (modelEl) modelEl.textContent = state.aiConfig?.model || 'AI model';
+    if (ctxEl) ctxEl.textContent = chatContextLabel();
+    if (attachBtn) attachBtn.classList.toggle('hidden', !state.project);
+    if (hintEl) {
+      hintEl.innerHTML = state.project
+        ? 'Type <code>@file</code> · <code>@active</code> · <code>@selection</code>'
+        : 'Open a project to attach files with <code>@filename</code>';
+    }
+    const empty = document.querySelector('.ai-chat-empty');
+    if (empty && state.chatOpen && !state.chatMessages.length) {
+      renderAiChatMessages();
+    }
+  }
+
+  async function runAiChatStream(payload, handlers) {
+    const ac = handlers.signal || new AbortController();
+    let finalData = null;
+    const res = await fetch(BASE + '/api/ai_stream.php', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-SiamTeX-CSRF': '1' },
+      body: JSON.stringify(payload),
+      signal: ac.signal,
+    });
+    const ct = res.headers.get('content-type') || '';
+    if (!res.ok) {
+      if (ct.includes('application/json')) {
+        const err = await res.json();
+        throw new Error(err.error || res.statusText);
+      }
+      throw new Error((await res.text()) || res.statusText);
+    }
+    if (!res.body || !ct.includes('text/event-stream')) {
+      throw new Error('Chat stream unavailable.');
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const wait = {
+      appendStream(t) { handlers.onDelta?.(t); },
+      setPhase() {},
+      setTokenUsage(u) { handlers.onUsage?.(u); },
+    };
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const chunk = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        parseSseBlock(chunk, wait, (p) => { finalData = p; });
+      }
+    }
+    if (buffer.trim()) {
+      parseSseBlock(buffer.trim(), wait, (p) => { finalData = p; });
+    }
+    if (!finalData) throw new Error('Chat ended without a response.');
+    return finalData;
+  }
+
+  async function sendAiChatMessage(text) {
+    const raw = String(text || '').trim();
+    if (!raw || state.chatBusy || !hasAiChat()) return;
+
+    const parsed = parseChatMentions(raw);
+    if (parsed.wantsSelection && !chatSelectionPayload(true)) {
+      toast('Highlight text in the editor for @selection, or remove @selection.', 'error');
+      return;
+    }
+    if (state.project && /@([a-zA-Z0-9_.\/-]+)/.test(raw)) {
+      const tokens = [...raw.matchAll(/@([a-zA-Z0-9_.\/-]+)/g)].map((m) => m[1]);
+      const unknown = tokens.filter((t) => {
+        const lower = t.toLowerCase();
+        if (['active', 'current', '.', 'selection'].includes(lower)) return false;
+        return !resolveChatMentionToken(t);
+      });
+      if (unknown.length) {
+        toast(`Unknown file @${unknown[0]} — check the file list or use @active`, 'error');
+        return;
+      }
+    }
+
+    const attachPaths = parsed.attachPaths;
+    const selection = chatSelectionPayload(parsed.wantsSelection);
+
+    state.chatMessages.push({ role: 'user', content: parsed.text, attachedFiles: attachPaths });
+    state.chatMessages.push({ role: 'assistant', content: '' });
+    const assistantIdx = state.chatMessages.length - 1;
+    renderAiChatMessages();
+    saveChatHistory();
+
+    const ac = new AbortController();
+    state.chatAbort = ac;
+    setAiChatBusy(true);
+
+    const mount = document.getElementById('aiChatMessages');
+    const bodyEl = mount?.querySelector('.ai-chat-msg:last-child .ai-chat-msg-body');
+
+    try {
+      const data = await runAiChatStream({
+        mode: 'chat',
+        projectId: state.project?.id || '',
+        messages: state.chatMessages.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
+        context: chatContextPayload(),
+        attachPaths,
+        selection,
+      }, {
+        signal: ac,
+        onDelta(t) {
+          state.chatMessages[assistantIdx].content += t;
+          if (bodyEl) {
+            scheduleChatStreamRender(bodyEl, mount, state.chatMessages[assistantIdx].content);
+          }
+        },
+        onUsage(u) {
+          const el = document.getElementById('aiChatUsage');
+          if (el && u) el.textContent = formatTokenUsage(u, { short: true });
+        },
+      });
+
+      if (data.message && !state.chatMessages[assistantIdx].content) {
+        state.chatMessages[assistantIdx].content = data.message;
+      }
+      if (data.attachedFiles?.length && state.chatMessages[assistantIdx - 1]) {
+        state.chatMessages[assistantIdx - 1].attachedFiles = data.attachedFiles;
+      }
+      applyAiUsageFromResponse(data);
+      saveChatHistory();
+      flushChatStreamRender(bodyEl, mount, state.chatMessages[assistantIdx].content);
+      renderAiChatMessages();
+    } catch (e) {
+      if (e.name === 'AbortError' || e.message.includes('cancelled')) {
+        if (!state.chatMessages[assistantIdx].content) {
+          state.chatMessages.pop();
+          state.chatMessages.pop();
+        }
+      } else {
+        state.chatMessages[assistantIdx].content = state.chatMessages[assistantIdx].content
+          || `Error: ${e.message}`;
+        toast(e.message, 'error');
+      }
+      saveChatHistory();
+      renderAiChatMessages();
+    } finally {
+      state.chatAbort = null;
+      setAiChatBusy(false);
+      const usageEl = document.getElementById('aiChatUsage');
+      if (usageEl) usageEl.textContent = '';
+    }
+  }
+
+  function hideChatMentionMenu() {
+    const menu = document.getElementById('aiChatMentionMenu');
+    if (!menu) return;
+    menu.classList.add('hidden');
+    menu.innerHTML = '';
+    state.chatMentionIdx = -1;
+  }
+
+  function chatMentionCandidates(query) {
+    const q = String(query || '').toLowerCase();
+    const items = [];
+    if (state.project) {
+      items.push({ token: 'active', label: '@active', hint: state.activePath || 'open file' });
+      if (state.editor?.getSelection?.()?.trim()) {
+        items.push({ token: 'selection', label: '@selection', hint: 'editor highlight' });
+      }
+      chatAttachableFiles().forEach((path) => {
+        const base = path.split('/').pop();
+        if (!q || path.toLowerCase().includes(q) || base.toLowerCase().includes(q)) {
+          items.push({ token: path, label: '@' + path, hint: base });
+        }
+      });
+    }
+    return items.slice(0, 12);
+  }
+
+  function insertChatMention(token) {
+    const input = document.getElementById('aiChatInput');
+    if (!input) return;
+    const val = input.value;
+    const pos = input.selectionStart ?? val.length;
+    const before = val.slice(0, pos);
+    const after = val.slice(pos);
+    const at = before.lastIndexOf('@');
+    if (at < 0) return;
+    const insert = '@' + token + ' ';
+    input.value = before.slice(0, at) + insert + after;
+    const caret = at + insert.length;
+    input.setSelectionRange(caret, caret);
+    input.focus();
+    hideChatMentionMenu();
+  }
+
+  function updateChatMentionMenu() {
+    const input = document.getElementById('aiChatInput');
+    const menu = document.getElementById('aiChatMentionMenu');
+    if (!input || !menu || !state.project) {
+      hideChatMentionMenu();
+      return;
+    }
+    const val = input.value;
+    const pos = input.selectionStart ?? val.length;
+    const before = val.slice(0, pos);
+    const at = before.lastIndexOf('@');
+    if (at < 0 || /\s/.test(before.slice(at + 1))) {
+      hideChatMentionMenu();
+      return;
+    }
+    const query = before.slice(at + 1);
+    const items = chatMentionCandidates(query);
+    if (!items.length) {
+      hideChatMentionMenu();
+      return;
+    }
+    state.chatMentionIdx = Math.min(Math.max(state.chatMentionIdx, 0), items.length - 1);
+    menu.classList.remove('hidden');
+    menu.innerHTML = items.map((item, i) => (
+      `<button type="button" class="ai-chat-mention-item${i === state.chatMentionIdx ? ' active' : ''}" data-token="${esc(item.token)}">
+        <span class="ai-chat-mention-label">${esc(item.label)}</span>
+        <span class="ai-chat-mention-hint">${esc(item.hint)}</span>
+      </button>`
+    )).join('');
+    menu.querySelectorAll('.ai-chat-mention-item').forEach((btn, i) => {
+      btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        insertChatMention(btn.getAttribute('data-token'));
+      });
+      btn.addEventListener('mouseenter', () => { state.chatMentionIdx = i; });
+    });
+  }
+
+  function clearAiChat() {
+    if (state.chatBusy) return;
+    state.chatMessages = [];
+    saveChatHistory();
+    renderAiChatMessages();
+    document.getElementById('aiChatInput')?.focus();
+  }
+
+  function initAiChatPanel() {
+    if (!hasAiChat() || aiChatMounted) return;
+    aiChatMounted = true;
+
+    const panel = document.createElement('aside');
+    panel.id = 'aiChatPanel';
+    panel.className = 'ai-chat-panel';
+    panel.hidden = true;
+    panel.setAttribute('aria-label', 'AI chat');
+    panel.innerHTML = `
+      <header class="ai-chat-header">
+        <div class="ai-chat-header-copy">
+          <strong>AI Chat</strong>
+          <span id="aiChatModel" class="ai-chat-model"></span>
+          <span id="aiChatContext" class="ai-chat-context"></span>
+        </div>
+        <div class="ai-chat-header-actions">
+          <button type="button" id="aiChatClear" class="ghost" title="New conversation">Clear</button>
+          <button type="button" id="aiChatClose" class="ghost" title="Close panel">×</button>
+        </div>
+      </header>
+      <div class="ai-chat-messages" id="aiChatMessages" role="log" aria-live="polite"></div>
+      <form id="aiChatForm" class="ai-chat-compose">
+        <div class="ai-chat-compose-top" id="aiChatComposeTop">
+          <button type="button" id="aiChatAttachActive" class="ghost ai-chat-attach-btn hidden" title="Insert @active">+ @active</button>
+          <span class="ai-chat-compose-hint" id="aiChatComposeHint">Type <code>@file</code> in a project to attach sources</span>
+        </div>
+        <div class="ai-chat-input-wrap">
+          <textarea id="aiChatInput" rows="3" placeholder="Ask anything… Type @ to attach a project file"></textarea>
+          <div class="ai-chat-mention-menu hidden" id="aiChatMentionMenu" role="listbox"></div>
+        </div>
+        <div class="ai-chat-compose-actions">
+          <span id="aiChatUsage" class="ai-chat-usage"></span>
+          <button type="button" id="aiChatStop" class="ghost hidden">Stop</button>
+          <button type="submit" id="aiChatSend" class="primary">Send</button>
+        </div>
+      </form>`;
+
+    const fab = document.createElement('button');
+    fab.type = 'button';
+    fab.id = 'aiChatFab';
+    fab.className = 'ai-chat-fab';
+    fab.title = 'AI Chat';
+    fab.setAttribute('aria-expanded', 'false');
+    fab.textContent = '💬';
+
+    document.getElementById('app')?.append(panel, fab);
+
+    fab.addEventListener('click', () => toggleAiChatPanel());
+    document.getElementById('aiChatClose')?.addEventListener('click', () => toggleAiChatPanel(false));
+    document.getElementById('aiChatClear')?.addEventListener('click', clearAiChat);
+    document.getElementById('aiChatStop')?.addEventListener('click', () => {
+      state.chatAbort?.abort();
+      setAiChatBusy(false);
+    });
+
+    const form = document.getElementById('aiChatForm');
+    const input = document.getElementById('aiChatInput');
+    document.getElementById('aiChatAttachActive')?.addEventListener('click', () => {
+      if (!input) return;
+      const suffix = input.value && !input.value.endsWith(' ') ? ' ' : '';
+      input.value += `${suffix}@active `;
+      input.focus();
+      updateChatMentionMenu();
+    });
+    form?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!document.getElementById('aiChatMentionMenu')?.classList.contains('hidden')) return;
+      const t = input?.value || '';
+      if (input) input.value = '';
+      hideChatMentionMenu();
+      sendAiChatMessage(t);
+    });
+    input?.addEventListener('input', () => {
+      state.chatMentionIdx = 0;
+      updateChatMentionMenu();
+    });
+    input?.addEventListener('keydown', (e) => {
+      const menu = document.getElementById('aiChatMentionMenu');
+      const menuOpen = menu && !menu.classList.contains('hidden');
+      if (menuOpen) {
+        const items = menu.querySelectorAll('.ai-chat-mention-item');
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          state.chatMentionIdx = Math.min(state.chatMentionIdx + 1, items.length - 1);
+          updateChatMentionMenu();
+          items[state.chatMentionIdx]?.scrollIntoView({ block: 'nearest' });
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          state.chatMentionIdx = Math.max(state.chatMentionIdx - 1, 0);
+          updateChatMentionMenu();
+          items[state.chatMentionIdx]?.scrollIntoView({ block: 'nearest' });
+          return;
+        }
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          e.preventDefault();
+          const active = items[state.chatMentionIdx];
+          if (active) insertChatMention(active.getAttribute('data-token'));
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          hideChatMentionMenu();
+          return;
+        }
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        form?.requestSubmit();
+      }
+    });
+    input?.addEventListener('blur', () => {
+      setTimeout(hideChatMentionMenu, 150);
+    });
+
+    loadChatHistory();
+    updateAiChatChrome();
+    if (localStorage.getItem('siamtex_chat_open') === '1') {
+      toggleAiChatPanel(true);
+    }
+  }
+
   function esc(s) {
     return String(s ?? '').replace(/[&<>"']/g, (c) => (
       { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
@@ -705,6 +1413,41 @@
 
   /* ---------- Top bar / dashboard ---------- */
 
+  function aiCan(feature) {
+    return !!(state.aiEnabled && state.aiPermissions && state.aiPermissions[feature]);
+  }
+
+  function hasAiChat() {
+    return aiCan('chat');
+  }
+
+  function isCompileEntry(path) {
+    return /\.tex$/i.test(path || '') && !String(path).includes('/');
+  }
+
+  function compileEntryForActive() {
+    const path = state.activePath;
+    if (path && isCompileEntry(path)) return path;
+    return state.project?.mainFile || 'main.tex';
+  }
+
+  function previewEntry() {
+    return compileEntryForActive();
+  }
+
+  function hasPdfForEntry(entry) {
+    if (!state.project) return false;
+    const list = state.project.pdfEntries || [];
+    return list.includes(entry);
+  }
+
+  function updatePreviewLabel() {
+    const label = document.querySelector('.preview-pane .pane-label');
+    if (!label) return;
+    const entry = previewEntry();
+    label.textContent = `PDF preview — ${entry}`;
+  }
+
   function renderTop() {
     const u = state.user;
     if (!u) {
@@ -718,9 +1461,13 @@
       : `<span class="logo" style="width:28px;height:28px;font-size:.9rem">∫</span>`;
     $top().innerHTML = `
       <span id="aiUsageGlobal" class="pill ai-usage-global hidden" title="Total AI tokens used on this account"></span>
+      ${state.aiEnabled && aiCan('chat') ? '<button type="button" id="btnTopChat" class="ghost">Chat</button>' : ''}
+      ${state.isAdmin ? '<button type="button" id="btnAdminAi" class="ghost">AI access</button>' : ''}
       <div class="user-chip">${avatar}<span>${esc(u.name || u.login || 'User')}</span></div>
       ${state.oauthConfigured ? `<button type="button" id="btnLogout" class="ghost">Sign out</button>` : ''}`;
     renderGlobalAiUsage();
+    document.getElementById('btnTopChat')?.addEventListener('click', () => toggleAiChatPanel(true));
+    document.getElementById('btnAdminAi')?.addEventListener('click', showAdminAiAccess);
     document.getElementById('btnLogout')?.addEventListener('click', async () => {
       await api('/api/auth_logout.php', { method: 'POST', json: {} });
       location.href = BASE + '/';
@@ -757,7 +1504,7 @@
       </article>`;
     }).join('');
 
-    const aiHero = state.aiEnabled ? `
+    const aiHero = aiCan('createProject') ? `
         <article class="card ai-new-project-card">
           <div class="ai-new-project-glow" aria-hidden="true"></div>
           <div class="ai-new-project-inner">
@@ -891,8 +1638,8 @@
   }
 
   function showAiNewProject() {
-    if (!state.aiEnabled) {
-      toast('AI is not configured on this server', 'error');
+    if (!aiCan('createProject')) {
+      toast('Create project with AI is not enabled for your account', 'error');
       return;
     }
     const cfg = state.aiConfig || {};
@@ -995,7 +1742,14 @@
     state.projects = proj.projects || [];
     state.templates = tpl.templates || [];
     state.commonFiles = tpl.commonFiles || [];
+    state.project = null;
+    state.activePath = null;
     renderDashboard();
+    if (state.chatOpen) {
+      loadChatHistory();
+      renderAiChatMessages();
+      updateAiChatChrome();
+    }
   }
 
   /* ---------- Workspace / editor ---------- */
@@ -1115,7 +1869,8 @@
       const data = await api('/api/project.php' + q);
       state.project = data.project;
       state.files = data.files || [];
-      state.build = data.build;
+      state.buildsByEntry = data.builds || {};
+      state.build = data.build || state.buildsByEntry[compileEntryForActive()] || null;
       if (data.aiUsage) state.project.aiUsage = data.aiUsage;
       state.contents = {};
       state.dirty = {};
@@ -1124,7 +1879,8 @@
         + (shareToken ? '&token=' + encodeURIComponent(shareToken) : ''));
       renderWorkspace();
       await loadFile(state.activePath);
-      if (state.project.hasPdf) refreshPdf();
+      updatePreviewLabel();
+      if (hasPdfForEntry(previewEntry())) refreshPdf();
       // Focus editor so typing works immediately
       setTimeout(() => state.editor?.focus(), 50);
     } catch (err) {
@@ -1247,7 +2003,8 @@
           <button type="button" id="btnExport">Export</button>
           ${p.role === 'owner' ? '<button type="button" id="btnShare">Share</button>' : ''}
           <button type="button" id="btnTools">Tools</button>
-          ${canEdit ? '<button type="button" id="btnAi">AI</button>' : ''}
+          ${canEdit && aiCan('assist') ? '<button type="button" id="btnAi">AI</button>' : ''}
+          ${aiCan('chat') ? '<button type="button" id="btnAiChat">Chat</button>' : ''}
           <button type="button" id="btnHistory" title="Version history">History</button>
           <span id="aiUsageProject" class="pill ai-usage-project hidden" title="AI token usage for this project"></span>
         </div>
@@ -1292,6 +2049,7 @@
     document.getElementById('btnShare')?.addEventListener('click', shareProject);
     document.getElementById('btnTools').onclick = showTools;
     document.getElementById('btnAi')?.addEventListener('click', showAiAssist);
+    document.getElementById('btnAiChat')?.addEventListener('click', () => toggleAiChatPanel(true));
     document.getElementById('btnHistory')?.addEventListener('click', showHistory);
     document.getElementById('btnAddFile')?.addEventListener('click', () => {
       addFile().catch((e) => toast(e.message || 'Could not open add-file dialog', 'error'));
@@ -1319,8 +2077,14 @@
     bindToolbar();
     wireEditorPrefs();
     renderProjectAiUsage();
+    updateAiChatChrome();
+    if (state.chatOpen) {
+      loadChatHistory();
+      renderAiChatMessages();
+    }
     renderFileList();
     renderProblems();
+    updatePreviewLabel();
     updateStatusDot();
     createEditor('', !canEdit);
     wireEditorPrefs();
@@ -1336,12 +2100,18 @@
     const list = document.getElementById('fileList');
     if (!list) return;
     const canEdit = canEditProject(state.project);
-    list.innerHTML = state.files.map((f) => `
+    list.innerHTML = state.files.map((f) => {
+      const isEntry = isCompileEntry(f.path);
+      const pdfReady = isEntry && hasPdfForEntry(f.path);
+      const entryMark = isEntry ? '<span class="file-entry-mark" title="Standalone compile entry">📄</span> ' : '';
+      const pdfMark = pdfReady ? '<span class="file-pdf-mark" title="PDF built">✓</span>' : '';
+      return `
       <div class="file-item ${f.path === state.activePath ? 'active' : ''} ${isBinaryFile(f) ? 'binary' : ''}" data-path="${esc(f.path)}">
-        <span>${isBinaryFile(f) ? (/\.(otf|ttf|ttc|woff2?)$/i.test(f.path) ? '🔤 ' : '🖼 ') : ''}${esc(f.path)}${state.dirty[f.path] ? ' •' : ''}</span>
+        <span>${isBinaryFile(f) ? (/\.(otf|ttf|ttc|woff2?)$/i.test(f.path) ? '🔤 ' : '🖼 ') : entryMark}${esc(f.path)}${state.dirty[f.path] ? ' •' : ''}${pdfMark}</span>
         ${canEdit && f.path !== state.project.mainFile
           ? `<button type="button" data-rm="${esc(f.path)}">×</button>` : ''}
-      </div>`).join('');
+      </div>`;
+    }).join('');
     list.querySelectorAll('[data-path]').forEach((el) => {
       el.addEventListener('click', (e) => {
         if (e.target.closest('[data-rm]')) return;
@@ -1473,6 +2243,17 @@
       wireEditorPrefs();
     }
     renderFileList();
+    if (isCompileEntry(path)) {
+      const entry = path;
+      state.build = state.buildsByEntry[entry] || null;
+      updatePreviewLabel();
+      renderProblems();
+      if (hasPdfForEntry(entry)) refreshPdf();
+      else {
+        const frame = document.getElementById('pdfFrame');
+        if (frame) frame.removeAttribute('src');
+      }
+    }
   }
 
   async function saveActive(source = 'save') {
@@ -1516,13 +2297,23 @@
     if (btn) { btn.disabled = true; btn.textContent = 'Compiling…'; }
     try {
       const files = await saveAllDirty();
+      const entry = compileEntryForActive();
       const result = await api('/api/compile.php', {
         method: 'POST',
-        json: { id: state.project.id, files },
+        json: { id: state.project.id, files, entry },
       });
       Object.keys(files).forEach((p) => { state.dirty[p] = false; });
       state.build = result;
-      state.project.hasPdf = result.hasPdf;
+      if (result.entry) {
+        state.buildsByEntry[result.entry] = result;
+      }
+      if (result.hasPdf && result.entry) {
+        const list = state.project.pdfEntries || [];
+        if (!list.includes(result.entry)) {
+          state.project.pdfEntries = [...list, result.entry].sort();
+        }
+        state.project.hasPdf = true;
+      }
       renderFileList();
       renderProblems();
       const dotKind = result.status === 'error' ? 'error'
@@ -1545,8 +2336,10 @@
   function refreshPdf() {
     const frame = document.getElementById('pdfFrame');
     if (!frame) return;
+    const entry = encodeURIComponent(previewEntry());
     const token = state.shareToken ? '&token=' + encodeURIComponent(state.shareToken) : '';
-    frame.src = BASE + '/api/pdf.php?id=' + encodeURIComponent(state.project.id) + token + '&t=' + Date.now();
+    frame.src = BASE + '/api/pdf.php?id=' + encodeURIComponent(state.project.id)
+      + '&entry=' + entry + token + '&t=' + Date.now();
   }
 
   function diagLocation(d) {
@@ -1588,7 +2381,7 @@
     }
     const diags = state.build?.diagnostics || [];
     const errors = diags.filter((d) => d.severity === 'error');
-    const canFix = canEditProject(state.project) && state.aiEnabled && errors.length > 0;
+    const canFix = canEditProject(state.project) && aiCan('fixErrors') && errors.length > 0;
     if (!diags.length) {
       if (state.build?.status === 'error' || state.build?.status === 'ok_with_warnings') {
         const fallback = logProblemFallback(state.build?.log || '');
@@ -1964,8 +2757,8 @@
   }
 
   function showAiAssist() {
-    if (!state.aiEnabled) {
-      toast('AI is not configured on this server', 'error');
+    if (!aiCan('assist')) {
+      toast('AI assist is not enabled for your account', 'error');
       return;
     }
     if (!state.project || !canEditProject(state.project)) {
@@ -2002,7 +2795,7 @@
         <div id="aiWaitMount" class="ai-wait-mount hidden"></div>
         <div id="aiPreview" class="ai-preview hidden"></div>
         <div class="modal-actions">
-          <button type="button" id="aiTest" class="ghost">Test connection</button>
+          ${aiCan('settings') ? '<button type="button" id="aiTest" class="ghost">Test connection</button>' : ''}
           <button type="button" id="aiRun" class="primary">Run</button>
           <button type="button" id="aiAccept" class="primary hidden">Accept into editor</button>
           <button type="button" id="aiClose">Close</button>
@@ -2026,7 +2819,7 @@
       };
     });
 
-    backdrop.querySelector('#aiTest').onclick = async () => {
+    backdrop.querySelector('#aiTest')?.addEventListener('click', async () => {
       const wait = createAiWait(waitMount, {
         title: 'Testing AI connection',
         subtitle: 'Quick ping to your configured provider.',
@@ -2044,7 +2837,7 @@
       } catch (e) {
         toast(e.message, e.message.includes('cancelled') ? '' : 'error');
       }
-    };
+    });
 
     backdrop.querySelector('#aiRun').onclick = async () => {
       const instruction = backdrop.querySelector('#aiInstruction').value.trim();
@@ -2161,8 +2954,8 @@
   }
 
   function showAiFixProblems(errors) {
-    if (!state.aiEnabled) {
-      toast('AI is not configured', 'error');
+    if (!aiCan('fixErrors')) {
+      toast('AI fix errors is not enabled for your account', 'error');
       return;
     }
     const backdrop = document.createElement('div');
@@ -2485,6 +3278,103 @@
     }
   }
 
+  async function showAdminAiAccess() {
+    if (!state.isAdmin) return;
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal modal-wide admin-ai-modal">
+        <h2>AI access control</h2>
+        <p class="ai-disclaimer">Grant AI features per user. Administrators always have full access. New users start with everything off.</p>
+        <p id="adminAiStatus" class="pill">Loading users…</p>
+        <div id="adminAiTable" class="admin-ai-table-wrap"></div>
+        <div class="modal-actions">
+          <button type="button" id="adminAiClose">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(backdrop);
+    backdrop.querySelector('#adminAiClose').onclick = () => backdrop.remove();
+
+    const tableEl = backdrop.querySelector('#adminAiTable');
+    const statusEl = backdrop.querySelector('#adminAiStatus');
+
+    const featureCols = [
+      ['chat', 'Chat'],
+      ['createProject', 'Create'],
+      ['assist', 'Assist'],
+      ['fixErrors', 'Fix'],
+      ['settings', 'Settings'],
+    ];
+
+    function renderTable(users) {
+      if (!users.length) {
+        tableEl.innerHTML = '<p class="ai-disclaimer">No users yet.</p>';
+        return;
+      }
+      tableEl.innerHTML = `
+        <table class="admin-ai-table">
+          <thead>
+            <tr>
+              <th>User</th>
+              ${featureCols.map(([, label]) => `<th>${esc(label)}</th>`).join('')}
+              <th>Tokens</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${users.map((u) => `
+              <tr data-user-id="${u.id}" class="${u.isAdmin ? 'admin-row' : ''}">
+                <td>
+                  <div class="admin-ai-user">
+                    <strong>${esc(u.name)}</strong>
+                    ${u.login ? `<span class="admin-ai-login">@${esc(u.login)}</span>` : ''}
+                    ${u.isAdmin ? '<span class="pill">admin</span>' : ''}
+                  </div>
+                </td>
+                ${featureCols.map(([key]) => `
+                  <td class="admin-ai-check">
+                    ${u.isAdmin ? '✓' : `<input type="checkbox" data-feature="${esc(key)}" ${u.permissions?.[key] ? 'checked' : ''} />`}
+                  </td>`).join('')}
+                <td class="admin-ai-tokens">${formatTokens(u.aiUsage?.totalTokens || 0)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>`;
+
+      tableEl.querySelectorAll('tbody tr:not(.admin-row) input[type="checkbox"]').forEach((cb) => {
+        cb.addEventListener('change', async () => {
+          const row = cb.closest('tr');
+          const userId = Number(row?.getAttribute('data-user-id'));
+          if (!userId) return;
+          const permissions = {};
+          row.querySelectorAll('input[data-feature]').forEach((input) => {
+            permissions[input.getAttribute('data-feature')] = input.checked;
+          });
+          cb.disabled = true;
+          try {
+            await api('/api/admin_ai_access.php', {
+              method: 'PATCH',
+              json: { userId, permissions },
+            });
+            toast('Saved AI access for user', 'ok');
+          } catch (e) {
+            toast(e.message, 'error');
+            cb.checked = !cb.checked;
+          } finally {
+            cb.disabled = false;
+          }
+        });
+      });
+    }
+
+    try {
+      const data = await api('/api/admin_ai_access.php');
+      statusEl.textContent = `${data.users.length} user(s) · admins from SIAMTEX_ADMIN_GITHUB_LOGINS`;
+      renderTable(data.users || []);
+    } catch (e) {
+      statusEl.textContent = e.message;
+      tableEl.innerHTML = '';
+    }
+  }
+
   async function boot() {
     try {
       if (typeof CodeMirror === 'undefined') {
@@ -2496,9 +3386,12 @@
       state.providers = me.providers || [];
       state.oauthConfigured = me.oauthConfigured;
       state.aiEnabled = !!me.aiEnabled;
+      state.aiPermissions = me.aiPermissions || null;
+      state.isAdmin = !!me.isAdmin;
       state.aiConfig = me.aiConfig || null;
       state.aiUsage = me.aiUsage || null;
       renderTop();
+      initAiChatPanel();
 
       if (!state.user && state.authRequired) {
         renderSplash();

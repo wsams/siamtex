@@ -61,6 +61,8 @@ try {
         'avatarUrl' => $profile['avatarUrl'] ?? null,
         'login' => $profile['login'] ?? null,
     ]);
+    (new \SiamTeX\AiPermissions($store))->syncAdminFromLogin($user);
+    $user = $store->loadUser((int) $user['id']) ?? $user;
     Auth::setSessionCookie((int) $user['id']);
     Auth::clearOAuthStateCookie();
     $return = $stateCookie['returnUrl'] !== '' ? $stateCookie['returnUrl'] : Config::oauthBaseUrl() . '/';

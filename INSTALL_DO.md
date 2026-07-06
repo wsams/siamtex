@@ -18,7 +18,9 @@ For generic installs (university server, Nginx, no AI), see [AGENTS.md](./AGENTS
 ## What you get
 
 - Browser LaTeX studio with live PDF preview and compile diagnostics
-- **AI assist** / **AI fix problems** *(alpha; quality depends on your model)*
+- **Multiple PDFs** — compile each top-level `.tex` separately (e.g. resume `main.tex` + `cover-letter.tex`)
+- **AI chat** (Q&A, `@file` context, Markdown code blocks) · **AI assist** · **AI fix problems** · **create project from prompt** *(alpha; quality depends on your model)*
+- **Per-user AI permissions** — off by default; operators set `SIAMTEX_ADMIN_GITHUB_LOGINS` and use **AI access** to enable features
 - **Version history** — branching undo tree per file, diff before restore
 - AES-256-GCM encryption at rest · optional GitHub OAuth · share links
 
@@ -281,6 +283,8 @@ You do **not** need a GPU on the droplet. Pick **one** path:
 
 AI features are **alpha / experimental** — quality depends on your model.
 
+**Multi-user hosts:** set `SIAMTEX_ADMIN_GITHUB_LOGINS` in `/etc/siamtex.env` (your GitHub username), restart php-fpm, run `php scripts/sync-ai-admins.php`, then sign in and use **AI access** to enable features for other users. New accounts start with all AI off.
+
 ### Path A — Tailscale + home Ollama
 
 ### 8a. Droplet joins Tailscale
@@ -307,7 +311,7 @@ sudo /var/www/html/siamtex/scripts/configure-ai-ollama.sh
 sudo systemctl restart php8.3-fpm
 ```
 
-**Streaming:** AI assist uses `api/ai_stream.php` (SSE). Ensure PHP **curl** is installed (`php8.3-curl`). On **Nginx**, use the sample vhost’s `ai_stream.php` location (`fastcgi_buffering off`, `fastcgi_read_timeout` ≥ `SIAMTEX_AI_TIMEOUT`, default 120s). Single-file edits stream live LaTeX; project-wide and fix-problems show status and character counts while Ollama returns JSON.
+**Streaming:** AI assist uses `api/ai_stream.php` (SSE). Ensure PHP **curl** is installed (`php8.3-curl`). On **Nginx**, use the sample vhost’s `ai_stream.php` location (`fastcgi_buffering off`, `fastcgi_read_timeout` ≥ `SIAMTEX_AI_TIMEOUT`, default 120s). Single-file edits stream live LaTeX; project-wide, fix-problems, and create-project show status/char counts while the model returns JSON. **AI chat** streams Markdown (rendered with copyable code blocks in the UI).
 
 ### Path B — Cloud provider (no Tailscale)
 
@@ -323,8 +327,11 @@ sudo systemctl restart php8.3-fpm
 1. Open `https://YOUR_DOMAIN/siamtex`
 2. Create a project from the **homework** template
 3. Edit and **Compile** — PDF should update
-4. **History** — confirm version timeline after a save
-5. **AI** (if enabled) → Test connection → single-file instruction → confirm **live output** in the progress panel → Accept
+4. *(Resume projects)* add `cover-letter.tex` at project root, open it, **Compile** — preview label should show `cover-letter.tex` and a separate PDF
+5. **History** — confirm version timeline after a save
+6. **AI** (if enabled for your account) → Test connection → single-file instruction → confirm **live output** → Accept
+7. **Chat** (if enabled) → ask a LaTeX question; confirm fenced ` ```latex ` blocks render as styled samples with **Copy**, not raw backticks
+8. *(Operators)* **AI access** — confirm admin can toggle AI features for other users
 
 ---
 

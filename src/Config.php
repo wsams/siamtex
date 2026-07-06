@@ -267,6 +267,32 @@ final class Config
         return $n > 5000 ? $n : 200000;
     }
 
+    /**
+     * GitHub logins (lowercase) that receive administrator + full AI access.
+     *
+     * @return list<string>
+     */
+    public static function adminGithubLogins(): array
+    {
+        $raw = getenv('SIAMTEX_ADMIN_GITHUB_LOGINS');
+        if ($raw === false || $raw === '') {
+            $raw = $_SERVER['SIAMTEX_ADMIN_GITHUB_LOGINS'] ?? '';
+        }
+        $raw = trim((string) $raw);
+        if ($raw === '') {
+            return [];
+        }
+        $parts = preg_split('/[\s,;]+/', $raw) ?: [];
+        $out = [];
+        foreach ($parts as $p) {
+            $p = strtolower(trim($p));
+            if ($p !== '') {
+                $out[] = $p;
+            }
+        }
+        return array_values(array_unique($out));
+    }
+
     public static function maxFileRevisions(): int
     {
         $n = (int) (getenv('SIAMTEX_MAX_FILE_REVISIONS') ?: '150');

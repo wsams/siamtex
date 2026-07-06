@@ -31,7 +31,7 @@ These files are **templates only**. Copy them to your server and edit paths, hos
 
 | Sample | Purpose |
 |--------|---------|
-| `siamtex.env.example` | OAuth, encryption keys, Docker image name |
+| `siamtex.env.example` | OAuth, encryption keys, Docker image, AI provider blocks, `SIAMTEX_ADMIN_GITHUB_LOGINS` |
 | `htaccess.example` | Copy to `.htaccess` in the web root |
 | `apache-siamtex.conf.example` | Virtual host, deny sensitive paths |
 | `nginx-siamtex.conf.example` | Server block for PHP-FPM; includes `ai_stream.php` SSE tuning (`fastcgi_buffering off`) |
@@ -50,4 +50,6 @@ Set `SIAMTEX_OAUTH_BASE_URL` to the public base URL (no trailing slash). Until O
 
 Plan for **2 GB+ RAM** and **40 GB+ disk** if you expect regular compiles (TeX Live in Docker is sizable). See [SPECS.md](../SPECS.md) §6.2.
 
-**AI inference** does not run on the droplet by default. Provider recipes: [docs/ai-providers.md](../docs/ai-providers.md). **AI features are alpha/experimental** — accuracy depends on the chosen model.
+**AI inference** does not run on the droplet by default. Provider recipes: [docs/ai-providers.md](../docs/ai-providers.md). **AI features are alpha/experimental** — accuracy depends on the chosen model. On multi-user hosts, set **`SIAMTEX_ADMIN_GITHUB_LOGINS`** so operators can enable per-user AI (chat, assist, fix errors, create project, BYOK) via the **AI access** admin UI; run `php scripts/sync-ai-admins.php` after env changes.
+
+**Compile model:** each **top-level** `.tex` in a project (no `/` in the path) may produce its own PDF; see [SPECS.md](../SPECS.md) F-35–F-36.

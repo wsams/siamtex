@@ -16,9 +16,10 @@ LaTeX is still the gold standard for academic writing — but the toolchain is i
 |--------------|----------------------------------|
 | Start from **homework** or **blank** templates with editable starter text | Multi-file **article** projects with `refs.bib` and natbib |
 | **Toolbar / Insert menus** for bold, headings, math, lists, tables — no memorizing `\begin{}` | Side-by-side **PDF preview** with debounced auto-compile |
-| **Clickable compile errors** that jump to the offending line | Import/export **zip**, **share links**, page estimates, geometry tools |
-| **AI fix problems** when the build breaks — review before applying | **Version history** with branching undo and diff-before-restore |
-| Resume package with partials (experience, education, skills) | **AES-256-GCM encryption at rest** for sources and PDFs |
+| **Multiple PDFs** — compile top-level files like `main.tex` and `cover-letter.tex` separately | Import/export **zip**, **share links**, page estimates, geometry tools |
+| **Clickable compile errors** that jump to the offending line | **Version history** with branching undo and diff-before-restore |
+| **AI fix problems** when the build breaks — review before applying | **AES-256-GCM encryption at rest** for sources and PDFs |
+| Resume package with partials (experience, education, skills) | |
 
 You get a real editor (CodeMirror), a sandboxed **Docker TeX worker** (`pdflatex`, `xelatex`, `lualatex`, BibTeX, Biber), and optional **GitHub OAuth** — or run in **local solo mode** on your own server with no sign-in wall.
 
@@ -41,9 +42,9 @@ Path B (cloud API):    Browser → VPS → OpenAI / Gemini / Grok / OpenRouter
 | **OpenAI, Gemini, Grok** | No home server; pay-as-you-go API | [docs/ai-providers.md](./docs/ai-providers.md) |
 | **Claude (Anthropic)** | Via **OpenRouter** or OpenAI-compatible proxy | [docs/ai-providers.md](./docs/ai-providers.md) |
 
-**In the app:** AI assist · AI fix compile problems · progress UI · version history.
+**In the app:** **AI chat** (Q&A with `@file` context) · **AI assist** · **AI fix compile problems** · **create project from prompt** · progress UI · version history · per-user AI permissions (admin-controlled).
 
-Traffic path: **browser → your PHP server → provider you configure** (never browser → home Ollama directly).
+Traffic path: **browser → your PHP server → provider you configure** (never browser → home Ollama directly). Operators set `SIAMTEX_ADMIN_GITHUB_LOGINS` for admins who grant AI access to other users.
 
 **Agent install:** say which provider in your prompt — see [docs/ai-providers.md](./docs/ai-providers.md) for env recipes. Architecture: [AI.md](./AI.md).
 
@@ -70,6 +71,12 @@ Click any image for the full-size capture. Thumbnails keep the README readable o
 **Add files & assets** — upload images, spin up `.tex` partials, bibliographies, and sections without leaving the browser.
 
 <a href="docs/screenshots/upload-files.png"><img src="docs/screenshots/upload-files-thumb.png" alt="SiamTeX add file dialog" width="480" /></a>
+
+### AI chat — math from a question *(alpha)*
+
+Separate from the structured **AI** edit tools: open **Chat**, ask how to typeset something in plain language, and copy the LaTeX from the reply’s code block into your document. Compile to see the rendered math in the PDF preview — no need to memorize `\frac` or environment syntax.
+
+<a href="docs/screenshots/chat-01-math-via-chat.png"><img src="docs/screenshots/chat-01-math-via-chat-thumb.png" alt="AI chat suggesting LaTeX for a math expression, pasted into the editor with the equation in the PDF preview" width="480" /></a>
 
 ### AI assist *(alpha)*
 
@@ -208,11 +215,13 @@ Restore an older node to continue from that point; nothing is erased — a new b
 
 - Multi-file projects with syntax-highlighted editor and Insert menus for common LaTeX
 - Live PDF preview and structured compile diagnostics (file, line, severity)
+- **Multiple compile entries** — each top-level `.tex` (e.g. `main.tex`, `cover-letter.tex`) builds its own PDF; preview follows the active file
 - Curated templates: blank, homework, resume (multi-file), academic article
 - Import / export zip · share links · author tools (page estimate, geometry)
-- Encrypted storage for project files and compiled PDFs
+- Encrypted storage for project files and compiled PDFs (per-entry PDF blobs)
 - GitHub OAuth optional · local solo mode when OAuth is unset
-- **AI assist** and **AI fix compile problems** *(alpha — quality depends on your model)*; server-configured Ollama or BYOK
+- **AI chat** (Markdown, copyable code blocks, `@file` context) · **AI assist** · **fix compile problems** · **create project from prompt** *(alpha — quality depends on your model)*; server Ollama or BYOK
+- **Per-user AI permissions** — off by default; admins (`SIAMTEX_ADMIN_GITHUB_LOGINS`) enable features per account
 - **Per-file version history** — branching undo tree, diff preview, restore
 
 Details: [SPECS.md](./SPECS.md) · AI architecture & BYOK: [AI.md](./AI.md)

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SiamTeX\Ai;
 
 use RuntimeException;
+use SiamTeX\AiPermissions;
 use SiamTeX\Config;
 use SiamTeX\Crypto;
 use SiamTeX\ProjectService;
@@ -13,17 +14,23 @@ use SiamTeX\Store;
 final class AiService
 {
     private OpenAiCompatibleClient $client;
+    private AiPermissions $permissions;
 
     public function __construct(
         private Store $store,
         private ProjectService $projects,
+        ?AiPermissions $permissions = null,
         ?OpenAiCompatibleClient $client = null,
     ) {
+        $this->permissions = $permissions ?? new AiPermissions($store);
         $this->client = $client ?? new OpenAiCompatibleClient();
     }
 
     public function configForUser(int $userId): AiConfig
     {
+        if (!$this->permissions->allows($userId, AiPermissions::SETTINGS)) {
+            return AiConfig::fromEnv();
+        }
         $st = $this->store->pdo()->prepare('SELECT * FROM user_ai_settings WHERE user_id = ?');
         $st->execute([$userId]);
         $row = $st->fetch();
@@ -31,6 +38,12 @@ final class AiService
             $row['api_key'] = Crypto::decrypt(Config::masterKey(), (string) $row['api_key_enc']);
         }
         return AiConfig::forUser($row ?: null);
+    }
+
+    /** @param array<string, mixed> $user */
+    private function requireAi(array $user, string $feature): void
+    {
+        $this->permissions->assert((int) $user['id'], $feature);
     }
 
     public function assertRateLimit(int $userId): void
@@ -159,6 +172,230 @@ final class AiService
     }
 
     /**
+     * @param list<array{role?:mixed, content?:mixed}> $messages
+     * @param array{projectName?:string, engine?:string, activeFile?:string} $context
+     * @param list<string> $attachTokens Paths or @tokens (main.tex, active, selection)
+     * @param array{path?:string, text?:string}|null $selection
+     * @return array{content:string, usage:array, usageTotals:array, attachedFiles:list<string>}
+     */
+    public function generalChatStream(
+        array $user,
+        array $messages,
+        array $context,
+        ?string $projectId,
+        array $attachTokens,
+        ?array $selection,
+        callable $onDelta,
+        callable $onUsage,
+        ?callable $shouldAbort = null,
+    ): array {
+        $normalized = self::normalizeChatMessages($messages);
+        if ($normalized === []) {
+            throw new RuntimeException('Message is required.');
+        }
+
+        $project = null;
+        if ($projectId !== null && $projectId !== '') {
+            $project = $this->projects->requireRole($user, $projectId, ['owner', 'edit', 'view']);
+        }
+
+        $this->requireAi($user, AiPermissions::CHAT);
+
+        $config = $this->configForUser((int) $user['id']);
+        $config->validate();
+        $this->assertRateLimit((int) $user['id']);
+
+        $activeFile = (string) ($context['activeFile'] ?? '');
+        $mentionTokens = self::parseChatMentionTokens($normalized[array_key_last($normalized)]['content']);
+        $tokens = array_values(array_unique(array_merge($attachTokens, $mentionTokens)));
+
+        $attachedFiles = [];
+        if ($project !== null && $tokens !== []) {
+            $attachedFiles = $this->loadChatAttachments($project, $tokens, $activeFile);
+        }
+
+        $selectionBlock = null;
+        if ($selection !== null && trim((string) ($selection['text'] ?? '')) !== '') {
+            $selectionBlock = [
+                'path' => (string) ($selection['path'] ?? $activeFile ?: 'editor'),
+                'text' => trim((string) $selection['text']),
+            ];
+            if (strlen($selectionBlock['text']) > 16000) {
+                $selectionBlock['text'] = substr($selectionBlock['text'], 0, 16000);
+            }
+        } elseif (in_array('selection', $tokens, true) && $activeFile !== '') {
+            throw new RuntimeException('@selection was used but no editor selection was sent. Highlight text first or remove @selection.');
+        }
+
+        $normalized = $this->injectChatAttachments($normalized, $attachedFiles, $selectionBlock);
+        $prompt = PromptBuilder::generalChat($normalized, $context, array_keys($attachedFiles));
+
+        $chat = $this->client->chatStream(
+            $config,
+            $prompt,
+            $onDelta,
+            $shouldAbort,
+            static function (AiUsage $u) use ($onUsage): void {
+                $onUsage($u);
+            },
+        );
+
+        $meta = $this->finalizeUsage(
+            (int) $user['id'],
+            'chat',
+            ($projectId !== null && $projectId !== '') ? $projectId : null,
+            $chat->usage,
+        );
+
+        return array_merge([
+            'content' => trim($chat->content),
+            'attachedFiles' => array_keys($attachedFiles),
+        ], $meta);
+    }
+
+    /**
+     * @param list<string> $tokens
+     * @return array<string, string>
+     */
+    private function loadChatAttachments(array $project, array $tokens, string $activeFile): array
+    {
+        $listed = $this->projects->listFiles((string) $project['id']);
+        $main = (string) $project['main_file'];
+        $paths = [];
+        foreach ($tokens as $token) {
+            if (in_array(strtolower($token), ['selection'], true)) {
+                continue;
+            }
+            $resolved = self::resolveChatAttachPath($listed, $token, $main, $activeFile);
+            if ($resolved !== null) {
+                $paths[] = $resolved;
+            }
+        }
+        $paths = array_values(array_unique($paths));
+        if ($paths === []) {
+            return [];
+        }
+
+        $files = [];
+        $budget = Config::aiMaxContextChars();
+        foreach ($paths as $path) {
+            if (!preg_match('/\.(tex|bib|sty|cls)$/i', $path)) {
+                continue;
+            }
+            $text = $this->projects->readFile($project, $path);
+            if (strlen($text) > $budget) {
+                throw new RuntimeException(
+                    $path . ' is too large to attach in chat. Mention a smaller file or use the AI edit tool.'
+                );
+            }
+            $files[$path] = $text;
+            $budget -= strlen($text);
+        }
+        return $files;
+    }
+
+    /**
+     * @param list<array{path:string}> $listed
+     */
+    private static function resolveChatAttachPath(array $listed, string $token, string $main, string $activeFile): ?string
+    {
+        $token = ltrim(str_replace('\\', '/', trim($token)), './');
+        if ($token === '' || str_contains($token, '..')) {
+            return null;
+        }
+        if (in_array(strtolower($token), ['active', 'current', '.'], true)) {
+            return $activeFile !== '' ? $activeFile : $main;
+        }
+        foreach ($listed as $f) {
+            if (($f['path'] ?? '') === $token) {
+                return (string) $f['path'];
+            }
+        }
+        foreach ($listed as $f) {
+            $path = (string) ($f['path'] ?? '');
+            if ($path !== '' && basename($path) === $token) {
+                return $path;
+            }
+        }
+        foreach ($listed as $f) {
+            $path = (string) ($f['path'] ?? '');
+            if ($path !== '' && str_ends_with($path, '/' . $token)) {
+                return $path;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * @param list<array{role:string, content:string}> $messages
+     * @param array<string, string> $files
+     * @param array{path:string, text:string}|null $selection
+     * @return list<array{role:string, content:string}>
+     */
+    private function injectChatAttachments(array $messages, array $files, ?array $selection): array
+    {
+        if ($files === [] && $selection === null) {
+            return $messages;
+        }
+        $lastIdx = array_key_last($messages);
+        if ($lastIdx === null || ($messages[$lastIdx]['role'] ?? '') !== 'user') {
+            return $messages;
+        }
+
+        $bundle = '';
+        foreach ($files as $path => $content) {
+            $bundle .= "\n<file path=\"{$path}\">\n{$content}\n</file>";
+        }
+        if ($selection !== null) {
+            $spath = $selection['path'];
+            $bundle .= "\n<selection file=\"{$spath}\">\n{$selection['text']}\n</selection>";
+        }
+
+        $messages[$lastIdx]['content'] = 'Project sources attached for this message only:'
+            . $bundle
+            . "\n\nUser message:\n"
+            . $messages[$lastIdx]['content'];
+
+        return $messages;
+    }
+
+    /** @return list<string> */
+    private static function parseChatMentionTokens(string $text): array
+    {
+        if (!preg_match_all('/@([a-zA-Z0-9_.\/-]+)/', $text, $matches)) {
+            return [];
+        }
+        return array_values(array_unique($matches[1]));
+    }
+
+    /**
+     * @param list<array{role?:mixed, content?:mixed}> $messages
+     * @return list<array{role:string, content:string}>
+     */
+    private static function normalizeChatMessages(array $messages): array
+    {
+        $out = [];
+        foreach (array_slice($messages, -24) as $message) {
+            if (!is_array($message)) {
+                continue;
+            }
+            $role = (string) ($message['role'] ?? '');
+            if (!in_array($role, ['user', 'assistant'], true)) {
+                continue;
+            }
+            $content = trim((string) ($message['content'] ?? ''));
+            if ($content === '') {
+                continue;
+            }
+            if (strlen($content) > 32000) {
+                $content = substr($content, 0, 32000);
+            }
+            $out[] = ['role' => $role, 'content' => $content];
+        }
+        return $out;
+    }
+
+    /**
      * @return array{summary:string, path:string, content:string, usage:array, usageTotals:array}
      */
     public function editFileStream(
@@ -170,6 +407,7 @@ final class AiService
         callable $onUsage,
         ?callable $shouldAbort = null,
     ): array {
+        $this->requireAi($user, AiPermissions::ASSIST);
         $instruction = trim($instruction);
         if ($instruction === '') {
             throw new RuntimeException('Instruction is required.');
@@ -216,6 +454,7 @@ final class AiService
         ?callable $onDelta = null,
         ?callable $shouldAbort = null,
     ): array {
+        $this->requireAi($user, AiPermissions::ASSIST);
         $instruction = trim($instruction);
         if ($instruction === '') {
             throw new RuntimeException('Instruction is required.');
@@ -260,7 +499,7 @@ final class AiService
         );
         $meta = $this->finalizeUsage((int) $user['id'], 'edit_project', $projectId, $chat->usage);
 
-        return array_merge(AiResponseParser::parseMultiFileJson($chat->content), $meta);
+        return array_merge(AiResponseParser::parseMultiFileJson($chat->content, $chat->finishReason), $meta);
     }
 
     /**
@@ -274,6 +513,7 @@ final class AiService
         ?callable $onDelta = null,
         ?callable $shouldAbort = null,
     ): array {
+        $this->requireAi($user, AiPermissions::FIX_ERRORS);
         $project = $this->projects->requireRole($user, $projectId, ['owner', 'edit']);
         $config = $this->configForUser((int) $user['id']);
         $config->validate();
@@ -329,7 +569,7 @@ final class AiService
         );
         $meta = $this->finalizeUsage((int) $user['id'], 'fix_problems', $projectId, $chat->usage);
 
-        return array_merge(AiResponseParser::parseMultiFileJson($chat->content), $meta);
+        return array_merge(AiResponseParser::parseMultiFileJson($chat->content, $chat->finishReason, $files), $meta);
     }
 
     /**
@@ -345,6 +585,7 @@ final class AiService
         ?callable $onDelta = null,
         ?callable $shouldAbort = null,
     ): array {
+        $this->requireAi($user, AiPermissions::CREATE_PROJECT);
         $prompt = trim($prompt);
         if ($prompt === '') {
             throw new RuntimeException('Describe what you want the project to contain.');
@@ -367,7 +608,7 @@ final class AiService
             $shouldAbort,
             $onDelta,
         );
-        $parsed = AiResponseParser::parseNewProjectJson($chat->content);
+        $parsed = AiResponseParser::parseNewProjectJson($chat->content, $chat->finishReason);
         $onStatus('Creating project files…');
         $project = $this->projects->createFromAiFiles(
             $user,
@@ -391,6 +632,7 @@ final class AiService
      */
     public function editFile(array $user, string $projectId, string $path, string $instruction): array
     {
+        $this->requireAi($user, AiPermissions::ASSIST);
         $instruction = trim($instruction);
         if ($instruction === '') {
             throw new RuntimeException('Instruction is required.');
@@ -421,6 +663,7 @@ final class AiService
      */
     public function editProject(array $user, string $projectId, string $instruction, string $extraContext = ''): array
     {
+        $this->requireAi($user, AiPermissions::ASSIST);
         $instruction = trim($instruction);
         if ($instruction === '') {
             throw new RuntimeException('Instruction is required.');
@@ -455,7 +698,7 @@ final class AiService
         $chat = $this->client->chat($config, $messages);
         $this->finalizeUsage((int) $user['id'], 'edit_project', $projectId, $chat->usage);
 
-        return AiResponseParser::parseMultiFileJson($chat->content);
+        return AiResponseParser::parseMultiFileJson($chat->content, $chat->finishReason);
     }
 
     /**
@@ -463,6 +706,7 @@ final class AiService
      */
     public function fixProblems(array $user, string $projectId): array
     {
+        $this->requireAi($user, AiPermissions::FIX_ERRORS);
         $project = $this->projects->requireRole($user, $projectId, ['owner', 'edit']);
         $config = $this->configForUser((int) $user['id']);
         $config->validate();
@@ -508,7 +752,7 @@ final class AiService
         $chat = $this->client->chat($config, $messages);
         $this->finalizeUsage((int) $user['id'], 'fix_problems', $projectId, $chat->usage);
 
-        return AiResponseParser::parseMultiFileJson($chat->content);
+        return AiResponseParser::parseMultiFileJson($chat->content, $chat->finishReason, $files);
     }
 
     /**
@@ -546,6 +790,7 @@ final class AiService
      */
     public function saveUserSettings(int $userId, array $patch): AiConfig
     {
+        $this->permissions->assert($userId, AiPermissions::SETTINGS);
         $existing = $this->store->pdo()->prepare('SELECT * FROM user_ai_settings WHERE user_id = ?');
         $existing->execute([$userId]);
         $row = $existing->fetch() ?: [];

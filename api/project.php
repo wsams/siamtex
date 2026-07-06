@@ -24,6 +24,7 @@ try {
                 'project' => stx_projects()->publicProject($p + ['_role' => $role]),
                 'files' => stx_projects()->listFiles($id),
                 'build' => stx_projects()->latestBuild($id),
+                'builds' => stx_projects()->latestBuildsByEntry($id),
                 'aiUsage' => stx_ai()->usageSummaryForProject($id),
             ]);
         }
@@ -32,6 +33,7 @@ try {
             'project' => stx_projects()->publicProject($p),
             'files' => stx_projects()->listFiles($id),
             'build' => stx_projects()->latestBuild($id),
+            'builds' => stx_projects()->latestBuildsByEntry($id),
             'aiUsage' => stx_ai()->usageSummaryForProject($id),
         ]);
     }

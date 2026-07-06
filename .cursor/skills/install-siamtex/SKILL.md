@@ -35,6 +35,7 @@ Collect from the human (ask if missing):
 - PHP-FPM version and pool user (usually `www-data`)
 - GitHub OAuth: yes/no
 - **AI:** none / Ollama (home) / OpenAI / Gemini / Grok / OpenRouter (Claude) — see [docs/ai-providers.md](../../../docs/ai-providers.md). **Alpha features** — set expectations with the human.
+- **AI admins** (multi-user): comma-separated GitHub logins for `SIAMTEX_ADMIN_GITHUB_LOGINS` — enables **AI access** UI to grant chat/assist/fix/create/BYOK per user.
 
 Never commit secrets, `.htaccess`, or `data/` to git. Never write production URLs into tracked source files.
 
@@ -58,6 +59,8 @@ Never commit secrets, `.htaccess`, or `data/` to git. Never write production URL
 - [ ] curl api/auth_me.php — JSON OK
 - [ ] browser: create project, compile PDF
 - [ ] if AI requested: docs/ai-providers.md → `/etc/siamtex.env` → restart php-fpm → AI test connection
+- [ ] if multi-user + AI: set `SIAMTEX_ADMIN_GITHUB_LOGINS` → `php scripts/sync-ai-admins.php` → enable features in **AI access**
+- [ ] optional: compile a second top-level `.tex` (e.g. cover letter) and confirm per-entry PDF preview
 ```
 
 ## Key paths

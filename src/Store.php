@@ -145,6 +145,59 @@ CREATE TABLE IF NOT EXISTS file_revision_heads (
 CREATE INDEX IF NOT EXISTS idx_file_revisions_lookup ON file_revisions(project_id, path, created_at);
 SQL);
         $this->migrateAiCallsColumns();
+        $this->migrateUserAdminAndAiPermissions();
+        $this->migrateBuildEntryFile();
+    }
+
+    private function migrateBuildEntryFile(): void
+    {
+        $cols = $this->db->query('PRAGMA table_info(builds)')->fetchAll(PDO::FETCH_ASSOC);
+        $names = array_column($cols, 'name');
+        if (!in_array('entry_file', $names, true)) {
+            $this->db->exec('ALTER TABLE builds ADD COLUMN entry_file TEXT');
+        }
+    }
+
+    private function migrateUserAdminAndAiPermissions(): void
+    {
+        $cols = $this->db->query('PRAGMA table_info(users)')->fetchAll(PDO::FETCH_ASSOC);
+        $names = array_column($cols, 'name');
+        if (!in_array('is_admin', $names, true)) {
+            $this->db->exec('ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0');
+        }
+
+        $this->db->exec(<<<'SQL'
+CREATE TABLE IF NOT EXISTS user_ai_permissions (
+  user_id INTEGER PRIMARY KEY,
+  ai_chat INTEGER NOT NULL DEFAULT 0,
+  ai_create_project INTEGER NOT NULL DEFAULT 0,
+  ai_assist INTEGER NOT NULL DEFAULT 0,
+  ai_fix_errors INTEGER NOT NULL DEFAULT 0,
+  ai_settings INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  updated_by INTEGER,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY(updated_by) REFERENCES users(id) ON DELETE SET NULL
+);
+SQL);
+        $this->syncAdminsFromEnv();
+    }
+
+    private function syncAdminsFromEnv(): void
+    {
+        $logins = Config::adminGithubLogins();
+        if ($logins === []) {
+            return;
+        }
+        $perms = new AiPermissions($this);
+        $placeholders = implode(',', array_fill(0, count($logins), '?'));
+        $st = $this->db->prepare(
+            "SELECT * FROM users WHERE provider = 'github' AND LOWER(provider_login) IN ({$placeholders})"
+        );
+        $st->execute($logins);
+        foreach ($st->fetchAll() as $user) {
+            $perms->syncAdminFromLogin($user);
+        }
     }
 
     private function migrateAiCallsColumns(): void
@@ -212,13 +265,15 @@ SQL);
 
     public function ensureLocalUser(): array
     {
-        return $this->upsertOAuthUser(Auth::PROVIDER_LOCAL, 'local-1', [
+        $user = $this->upsertOAuthUser(Auth::PROVIDER_LOCAL, 'local-1', [
             'login' => 'local',
             'name' => 'Local User',
             'email' => null,
             'emailVerified' => false,
             'avatarUrl' => null,
         ]);
+        (new AiPermissions($this))->bootstrapLocalAdmin((int) $user['id']);
+        return $this->loadUser((int) $user['id']) ?? $user;
     }
 
     public static function now(): string

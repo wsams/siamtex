@@ -13,9 +13,9 @@ final class CompileService
     }
 
     /**
-     * @return array{status:string, exitCode:?int, durationMs:int, log:string, diagnostics:list<array>, hasPdf:bool, buildId:int}
+     * @return array{status:string, exitCode:?int, durationMs:int, log:string, diagnostics:list<array>, hasPdf:bool, buildId:int, entry:string}
      */
-    public function compile(array $project): array
+    public function compile(array $project, ?string $entry = null): array
     {
         $work = Config::tmpDir() . '/job-' . $project['id'] . '-' . bin2hex(random_bytes(4));
         if (!mkdir($work, 0770, true) && !is_dir($work)) {
@@ -30,7 +30,7 @@ final class CompileService
 
         try {
             $this->projects->materialize($project, $work);
-            $main = $project['main_file'];
+            $main = $this->projects->resolveCompileEntry($project, $entry);
             $engine = $project['engine'] ?: 'pdflatex';
             $pdfName = preg_replace('/\\.tex$/i', '', $main) . '.pdf';
 
@@ -106,7 +106,7 @@ final class CompileService
 
             $pdfPath = $work . '/' . $pdfName;
             if (is_file($pdfPath) && filesize($pdfPath) > 0) {
-                $this->projects->storePdf($project, (string) file_get_contents($pdfPath));
+                $this->projects->storePdf($project, (string) file_get_contents($pdfPath), $main);
                 $hasPdf = true;
                 $status = ($exitCode === 0) ? 'ok' : 'ok_with_warnings';
             } else {
@@ -120,6 +120,7 @@ final class CompileService
         $diagnostics = LogParser::parse($log);
         $buildId = $this->projects->saveBuild(
             $project['id'],
+            $main,
             $status,
             $project['engine'],
             $exitCode,
@@ -137,6 +138,7 @@ final class CompileService
             'diagnostics' => $diagnostics,
             'hasPdf' => $hasPdf,
             'buildId' => $buildId,
+            'entry' => $main,
         ];
     }
 
