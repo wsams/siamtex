@@ -103,6 +103,16 @@ function stx_public_user(?array $u): ?array
     ];
 }
 
+function stx_log_upload(string $message): void
+{
+    $dir = dirname(__DIR__) . '/data/tmp';
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0770, true);
+    }
+    $line = gmdate('c') . ' ' . $message . "\n";
+    @file_put_contents($dir . '/upload.log', $line, FILE_APPEND | LOCK_EX);
+}
+
 function stx_http_error(Throwable $e): void
 {
     if ($e instanceof JsonException) {

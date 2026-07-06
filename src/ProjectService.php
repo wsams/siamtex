@@ -324,8 +324,9 @@ SQL);
      */
     public function writeUploadedFile(array $user, string $projectId, array $upload, ?string $path = null): array
     {
-        if (($upload['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
-            throw new RuntimeException('Upload failed.');
+        $err = (int) ($upload['error'] ?? UPLOAD_ERR_NO_FILE);
+        if ($err !== UPLOAD_ERR_OK) {
+            throw new RuntimeException(self::uploadErrorMessage($err));
         }
         $size = (int) ($upload['size'] ?? 0);
         if ($size <= 0) {
@@ -400,6 +401,20 @@ SQL);
      * Normalize a project-relative path for storage and TeX.
      * Spaces and other awkward characters become underscores (LaTeX-friendly).
      */
+    public static function uploadErrorMessage(int $code): string
+    {
+        return match ($code) {
+            UPLOAD_ERR_INI_SIZE => 'File exceeds server upload limit (PHP upload_max_filesize).',
+            UPLOAD_ERR_FORM_SIZE => 'File exceeds the form upload limit.',
+            UPLOAD_ERR_PARTIAL => 'Upload was interrupted — try again.',
+            UPLOAD_ERR_NO_FILE => 'No file was received.',
+            UPLOAD_ERR_NO_TMP_DIR => 'Server upload temp directory is missing.',
+            UPLOAD_ERR_CANT_WRITE => 'Server could not write the upload to disk.',
+            UPLOAD_ERR_EXTENSION => 'A server extension blocked this upload.',
+            default => 'Upload failed (code ' . $code . ').',
+        };
+    }
+
     public function safePath(string $path): string
     {
         $path = str_replace('\\', '/', $path);

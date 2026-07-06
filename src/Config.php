@@ -194,7 +194,7 @@ final class Config
 
     public static function maxUploadBytes(): int
     {
-        return (int) (getenv('SIAMTEX_MAX_UPLOAD_BYTES') ?: (5 * 1024 * 1024));
+        return (int) (getenv('SIAMTEX_MAX_UPLOAD_BYTES') ?: (10 * 1024 * 1024));
     }
 
     public static function artifactRetentionDays(): int

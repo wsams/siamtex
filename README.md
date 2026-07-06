@@ -99,6 +99,109 @@ End-to-end example: ask the model to turn a blank article into a pancake recipe,
 
 <a href="docs/screenshots/ai-06-pdf-result.png"><img src="docs/screenshots/ai-06-pdf-result-thumb.png" alt="Rendered PDF after accepting AI edits" width="480" /></a>
 
+### Upload an image, insert it with AI, resize in place
+
+Continuing the pancake-recipe project: upload a photo, ask AI to place it in the document, then tweak the layout — still with review-before-accept at every step.
+
+**7. Upload the asset** — use **+ File → Choose files…** to add `pancakes.png` to the project (shows in the file list beside `main.tex`).
+
+<a href="docs/screenshots/wf-01-photo-uploaded.png"><img src="docs/screenshots/wf-01-photo-uploaded-thumb.png" alt="Uploaded pancakes.png in the file list" width="480" /></a>
+
+**8. Ask AI to insert the figure** — open **AI**, keep scope on the current file, and describe placement (centered, border, padding, etc.). The model sees your uploaded filename.
+
+<a href="docs/screenshots/wf-02-ai-insert-photo.png"><img src="docs/screenshots/wf-02-ai-insert-photo-thumb.png" alt="AI assist dialog asking to insert pancakes.png in the introduction" width="480" /></a>
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<strong>9a. While it runs</strong> — progress UI while the model edits <code>main.tex</code>.<br/>
+<a href="docs/screenshots/wf-03-ai-processing.png"><img src="docs/screenshots/wf-03-ai-processing-thumb.png" alt="AI processing insert-photo request" width="400" /></a>
+</td>
+<td width="50%" valign="top">
+<strong>9b. Review the suggestion</strong> — <code>\includegraphics</code>, figure environment, etc. Accept only when it looks right.<br/>
+<a href="docs/screenshots/wf-04-ai-suggestion-insert.png"><img src="docs/screenshots/wf-04-ai-suggestion-insert-thumb.png" alt="AI suggested LaTeX to insert the photo" width="400" /></a>
+</td>
+</tr>
+</table>
+
+**10. Photo in the PDF** — after accept and compile, the introduction shows the centered image with a border.
+
+<a href="docs/screenshots/wf-05-pdf-with-photo.png"><img src="docs/screenshots/wf-05-pdf-with-photo-thumb.png" alt="PDF preview with pancakes photo in the introduction" width="480" /></a>
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<strong>11a. Resize request</strong> — tell AI the image is too large and ask for a smaller width.<br/>
+<a href="docs/screenshots/wf-06-ai-resize-request.png"><img src="docs/screenshots/wf-06-ai-resize-request-thumb.png" alt="AI dialog asking to shrink the photo" width="400" /></a>
+</td>
+<td width="50%" valign="top">
+<strong>11b. Suggested tweak</strong> — updated <code>width=</code> or similar in the figure code.<br/>
+<a href="docs/screenshots/wf-07-ai-resize-suggestion.png"><img src="docs/screenshots/wf-07-ai-resize-suggestion-thumb.png" alt="AI suggestion to resize the figure" width="400" /></a>
+</td>
+</tr>
+</table>
+
+**12. Smaller figure in the PDF** — accept, recompile, and the photo fits the page better.
+
+<a href="docs/screenshots/wf-08-pdf-resized.png"><img src="docs/screenshots/wf-08-pdf-resized-thumb.png" alt="PDF with resized pancakes photo" width="480" /></a>
+
+### Fix a broken compile with AI
+
+To demo recovery, the document was intentionally broken. **Problems** lists the error; **AI fix problems** sends diagnostics and affected files to your model.
+
+**13. Good state before the break** — the recipe with a working figure, for comparison when browsing history later.
+
+<a href="docs/screenshots/wf-16-before-break.png"><img src="docs/screenshots/wf-16-before-break-thumb.png" alt="Editor and PDF before the document was broken" width="480" /></a>
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<strong>14a. Compile error</strong> — structured problem in the bottom panel (file, line, message).<br/>
+<a href="docs/screenshots/wf-09-compile-error.png"><img src="docs/screenshots/wf-09-compile-error-thumb.png" alt="Problems panel showing a LaTeX compile error" width="400" /></a>
+</td>
+<td width="50%" valign="top">
+<strong>14b. AI fix dialog</strong> — click <strong>AI fix problems</strong>; review the listed errors before running.<br/>
+<a href="docs/screenshots/wf-10-ai-fix-dialog.png"><img src="docs/screenshots/wf-10-ai-fix-dialog-thumb.png" alt="AI fix compile problems dialog" width="400" /></a>
+</td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<strong>15a. Analyzing</strong> — AI reads the build log and source, then proposes a minimal fix.<br/>
+<a href="docs/screenshots/wf-11-ai-fix-running.png"><img src="docs/screenshots/wf-11-ai-fix-running-thumb.png" alt="AI fix problems progress spinner" width="400" /></a>
+</td>
+<td width="50%" valign="top">
+<strong>15b. Suggested fix</strong> — corrected LaTeX in the preview; accept to apply and recompile.<br/>
+<a href="docs/screenshots/wf-12-ai-fix-suggestion.png"><img src="docs/screenshots/wf-12-ai-fix-suggestion-thumb.png" alt="AI suggested fix for compile errors" width="400" /></a>
+</td>
+</tr>
+</table>
+
+**16. Building again** — after accepting the fix, the PDF preview returns and the error clears from **Problems**.
+
+<a href="docs/screenshots/wf-13-pdf-fixed.png"><img src="docs/screenshots/wf-13-pdf-fixed-thumb.png" alt="PDF preview after AI fix restored a successful compile" width="480" /></a>
+
+### Version history (branching undo tree)
+
+Every save, AI accept, and restore creates a node on a **per-file timeline** — like Vim’s undo tree. Pick any revision, diff against the current editor (or another version), then restore; restoring branches forward instead of deleting history.
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<strong>17a. Timeline</strong> — open <strong>History</strong> to see branches for <code>main.tex</code>.<br/>
+<a href="docs/screenshots/wf-14-history-dialog.png"><img src="docs/screenshots/wf-14-history-dialog-thumb.png" alt="Version history dialog with branching timeline" width="400" /></a>
+</td>
+<td width="50%" valign="top">
+<strong>17b. Diff before restore</strong> — inspect the AI fix (or any edit) line-by-line before jumping back.<br/>
+<a href="docs/screenshots/wf-15-history-diff-fix.png"><img src="docs/screenshots/wf-15-history-diff-fix-thumb.png" alt="History diff showing the AI compile fix" width="400" /></a>
+</td>
+</tr>
+</table>
+
+Restore an older node to continue from that point; nothing is erased — a new branch grows from the revision you chose.
+
 ---
 
 ## Features

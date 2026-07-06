@@ -58,10 +58,19 @@
 
   function toast(msg, kind = '') {
     const el = document.getElementById('toast');
+    if (!el) return;
     el.textContent = msg;
-    el.className = 'toast ' + kind;
+    el.className = 'toast' + (kind ? ' ' + kind : '');
+    el.classList.remove('hidden');
     clearTimeout(el._t);
-    el._t = setTimeout(() => { el.className = 'toast hidden'; }, 3200);
+    el._t = setTimeout(() => { el.classList.add('hidden'); }, 5000);
+  }
+
+  function formatBytes(n) {
+    const b = Number(n) || 0;
+    if (b < 1024) return b + ' B';
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+    return (b / (1024 * 1024)).toFixed(1) + ' MB';
   }
 
   function aiTimeoutSeconds() {
@@ -847,7 +856,9 @@
     document.getElementById('btnTools').onclick = showTools;
     document.getElementById('btnAi')?.addEventListener('click', showAiAssist);
     document.getElementById('btnHistory')?.addEventListener('click', showHistory);
-    document.getElementById('btnAddFile')?.addEventListener('click', addFile);
+    document.getElementById('btnAddFile')?.addEventListener('click', () => {
+      addFile().catch((e) => toast(e.message || 'Could not open add-file dialog', 'error'));
+    });
     document.getElementById('projName').onchange = async (e) => {
       if (!canEdit) return;
       state.project = (await api('/api/project.php?id=' + encodeURIComponent(p.id), {
@@ -1242,16 +1253,27 @@
       .join('/');
   }
 
+  function uploadDestPath(file, { path = '', prefix = '' }, fileCount) {
+    if (fileCount === 1 && path) return sanitizePath(path);
+    const base = prefix
+      ? prefix.replace(/^\/+|\/+$/g, '') + '/' + file.name
+      : file.name;
+    return sanitizePath(base);
+  }
+
   async function uploadProjectFiles(fileList, { path = '', prefix = '' } = {}) {
     const files = Array.from(fileList || []);
     if (!files.length) throw new Error('Choose one or more files to upload.');
+    if (!state.project?.id) throw new Error('Open a project before uploading.');
     const fd = new FormData();
     fd.append('id', state.project.id);
-    if (files.length === 1 && path) {
-      fd.append('path', path);
+    const cleanPath = path ? sanitizePath(path) : '';
+    const cleanPrefix = prefix ? prefix.replace(/^\/+|\/+$/g, '') : '';
+    if (files.length === 1) {
+      if (cleanPath) fd.append('path', cleanPath);
       fd.append('file', files[0]);
     } else {
-      if (prefix) fd.append('prefix', prefix.replace(/^\/+|\/+$/g, ''));
+      if (cleanPrefix) fd.append('prefix', cleanPrefix);
       files.forEach((f) => fd.append('files[]', f));
     }
     const res = await fetch(BASE + '/api/upload.php', {
@@ -1260,8 +1282,16 @@
       headers: { 'X-SiamTeX-CSRF': '1' },
       body: fd,
     });
-    const data = await res.json();
+    const raw = await res.text();
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new Error(raw.trim() || `Upload failed (HTTP ${res.status})`);
+    }
     if (!res.ok) throw new Error(data.error || 'Upload failed');
+    const saved = data.files || (data.file ? [data.file] : []);
+    if (!saved.length) throw new Error(data.error || 'No files were saved.');
     return data;
   }
 
@@ -1286,9 +1316,13 @@
 
         <div class="upload-box">
           <strong>Upload from your computer</strong>
-          <p>Select <em>multiple</em> files at once. TeX sources, styles, fonts, images, PDF/EPS, and other project assets. Max 5&nbsp;MB each.</p>
-          <input id="afUpload" type="file" multiple accept=".tex,.ltx,.sty,.cls,.clo,.dtx,.ins,.fd,.def,.cfg,.bib,.bst,.bbx,.cbx,.lbx,.dbx,.txt,.md,.csv,.tsv,.json,.yaml,.yml,.xml,.svg,.lua,.lco,.ldf,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff,.ico,.pdf,.eps,.ps,.otf,.ttf,.ttc,.woff,.woff2,.pfb,.afm,.tfm,.map,.enc" />
+          <p>Select one or more files, then click <strong>Upload files</strong>. Images, TeX sources, fonts, PDF/EPS, and other project assets. Max 10&nbsp;MB each.</p>
+          <label class="upload-pick">
+            <span class="btn">Choose files…</span>
+            <input id="afUpload" type="file" multiple accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,image/tiff,image/svg+xml,.tex,.ltx,.sty,.cls,.clo,.dtx,.ins,.fd,.def,.cfg,.bib,.bst,.bbx,.cbx,.lbx,.dbx,.txt,.md,.csv,.tsv,.json,.yaml,.yml,.xml,.svg,.lua,.lco,.ldf,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff,.ico,.pdf,.eps,.ps,.otf,.ttf,.ttc,.woff,.woff2,.pfb,.afm,.tfm,.map,.enc" />
+          </label>
           <p id="afUploadCount" class="upload-count"></p>
+          <p id="afUploadErr" class="upload-err hidden" role="alert"></p>
           <label style="margin-top:8px">Folder prefix (optional, for multiple files)</label>
           <input id="afUploadPrefix" type="text" placeholder="e.g. fonts or images" />
           <label style="margin-top:8px">Save as (optional, single file only)</label>
@@ -1319,23 +1353,46 @@
 
     const uploadInput = backdrop.querySelector('#afUpload');
     const uploadCount = backdrop.querySelector('#afUploadCount');
+    const uploadErr = backdrop.querySelector('#afUploadErr');
+    const showUploadErr = (msg) => {
+      if (!uploadErr) {
+        toast(msg, 'error');
+        return;
+      }
+      uploadErr.textContent = msg;
+      uploadErr.classList.remove('hidden');
+    };
+    const clearUploadErr = () => {
+      uploadErr?.classList.add('hidden');
+      if (uploadErr) uploadErr.textContent = '';
+    };
     const updateCount = () => {
-      const n = uploadInput.files?.length || 0;
-      uploadCount.textContent = n ? `${n} file${n === 1 ? '' : 's'} selected` : '';
+      clearUploadErr();
+      const list = uploadInput.files;
+      const n = list?.length || 0;
+      if (!n) {
+        uploadCount.textContent = '';
+        return;
+      }
+      const names = Array.from(list).map((f) => `${f.name} (${formatBytes(f.size)})`).join(', ');
+      uploadCount.textContent = `${n} file${n === 1 ? '' : 's'} selected: ${names} — click Upload files`;
     };
     uploadInput.addEventListener('change', updateCount);
 
     backdrop.querySelector('#afUploadBtn').onclick = async () => {
       const btn = backdrop.querySelector('#afUploadBtn');
+      clearUploadErr();
       try {
         const list = uploadInput.files;
         if (!list?.length) throw new Error('Choose one or more files to upload.');
         const path = (backdrop.querySelector('#afUploadPath').value || '').trim();
         const prefix = (backdrop.querySelector('#afUploadPrefix').value || '').trim();
+        const maxBytes = 10 * 1024 * 1024;
         for (const f of list) {
-          const dest = sanitizePath(list.length === 1 && path
-            ? path
-            : (prefix ? prefix.replace(/^\/+|\/+$/g, '') + '/' + f.name : f.name));
+          if (f.size > maxBytes) {
+            throw new Error(`${f.name} is ${formatBytes(f.size)} — max ${formatBytes(maxBytes)} per file.`);
+          }
+          const dest = uploadDestPath(f, { path, prefix }, list.length);
           if (!dest) throw new Error('Invalid file name: ' + f.name);
           if (existing.has(dest)) throw new Error('Already in project: ' + dest);
         }
@@ -1353,10 +1410,13 @@
           existing.add(meta.path);
           state.contents[meta.path] = meta.binary ? null : undefined;
         }
+        renderFileList();
         const errN = (data.errors || []).length;
         backdrop.remove();
-        if (saved.length) {
-          await loadFile(saved[saved.length - 1].path);
+        try {
+          if (saved.length) await loadFile(saved[saved.length - 1].path);
+        } catch (loadErr) {
+          toast(loadErr.message || 'Uploaded, but could not open preview', 'error');
         }
         if (errN) {
           toast(`Uploaded ${saved.length}, ${errN} failed`, 'error');
@@ -1364,9 +1424,12 @@
           toast(saved.length === 1 ? `Uploaded ${saved[0].path}` : `Uploaded ${saved.length} files`, 'ok');
         }
       } catch (e) {
+        const msg = e?.message || 'Upload failed';
+        showUploadErr(msg);
+        toast(msg, 'error');
+      } finally {
         btn.disabled = false;
         btn.textContent = 'Upload files';
-        toast(e.message, 'error');
       }
     };
 

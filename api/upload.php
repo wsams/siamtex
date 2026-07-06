@@ -56,6 +56,16 @@ try {
 
     $uploads = stx_normalize_uploads();
     if ($uploads === []) {
+        $filesDbg = [];
+        foreach (array_keys($_FILES) as $key) {
+            $f = $_FILES[$key];
+            $filesDbg[$key] = is_array($f['error'] ?? null)
+                ? array_map('intval', (array) $f['error'])
+                : (int) ($f['error'] ?? -1);
+        }
+        stx_log_upload('reject empty uploads project=' . $id
+            . ' content_length=' . ($_SERVER['CONTENT_LENGTH'] ?? '?')
+            . ' files=' . json_encode($filesDbg));
         stx_json(['error' => 'Choose one or more files to upload'], 400);
     }
 
@@ -86,13 +96,24 @@ try {
         }
     }
 
-    if ($saved === [] && $errors !== []) {
+    if ($saved === []) {
+        $message = $errors[0]['error'] ?? 'No files were received. The file may exceed server upload limits.';
+        stx_log_upload('fail project=' . $id
+            . ' message=' . $message
+            . ' errors=' . json_encode($errors)
+            . ' uploads=' . json_encode(array_map(static fn ($u) => [
+                'name' => $u['name'] ?? '',
+                'error' => $u['error'] ?? null,
+                'size' => $u['size'] ?? null,
+            ], $uploads)));
         stx_json([
-            'error' => $errors[0]['error'] ?? 'Upload failed',
+            'error' => $message,
             'errors' => $errors,
         ], 400);
     }
 
+    stx_log_upload('ok project=' . $id . ' saved=' . count($saved)
+        . ' paths=' . json_encode(array_column($saved, 'path')));
     stx_json([
         'files' => $saved,
         // Back-compat for single-file clients
