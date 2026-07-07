@@ -42,11 +42,23 @@ Path B (cloud API):    Browser → VPS → OpenAI / Gemini / Grok / OpenRouter
 | **OpenAI, Gemini, Grok** | No home server; pay-as-you-go API | [docs/ai-providers.md](./docs/ai-providers.md) |
 | **Claude (Anthropic)** | Via **OpenRouter** or OpenAI-compatible proxy | [docs/ai-providers.md](./docs/ai-providers.md) |
 
-**In the app:** **AI chat** (Q&A with `@file` context) · **AI assist** · **AI fix compile problems** · **create project from prompt** · progress UI · version history · per-user AI permissions (admin-controlled).
+**In the app:** **AI chat** (Q&A with `@file` context) · **AI assist** · **AI fix compile problems** · **create project from prompt** · progress UI · version history.
 
-Traffic path: **browser → your PHP server → provider you configure** (never browser → home Ollama directly). Operators set `SIAMTEX_ADMIN_GITHUB_LOGINS` for admins who grant AI access to other users.
+Traffic path: **browser → your PHP server → provider you configure** (never browser → home Ollama directly).
 
-**Agent install:** say which provider in your prompt — see [docs/ai-providers.md](./docs/ai-providers.md) for env recipes. Architecture: [AI.md](./AI.md).
+### Administrator-controlled AI
+
+On multi-user hosts, **AI is managed by an administrator** — not automatically on for everyone.
+
+| Control | How it works |
+|---------|----------------|
+| **Server switch** | `SIAMTEX_AI_ENABLED=0` disables AI for the whole instance |
+| **Per-user features** | Admins (`SIAMTEX_ADMIN_GITHUB_LOGINS`) use **AI access** in the app to enable Chat, Create project, Assist, Fix errors, and BYOK settings per account |
+| **Default for new users** | All AI features **off** until granted |
+| **Token quotas** | Optional per-user cap; blank = unlimited. Enforced before each AI call |
+| **Usage visibility** | **AI access** shows tokens used per user (including admins) and **all-users total** |
+
+Provider setup: [docs/ai-providers.md](./docs/ai-providers.md) · architecture: [AI.md](./AI.md).
 
 ---
 
@@ -221,7 +233,8 @@ Restore an older node to continue from that point; nothing is erased — a new b
 - Encrypted storage for project files and compiled PDFs (per-entry PDF blobs)
 - GitHub OAuth optional · local solo mode when OAuth is unset
 - **AI chat** (Markdown, copyable code blocks, `@file` context) · **AI assist** · **fix compile problems** · **create project from prompt** *(alpha — quality depends on your model)*; server Ollama or BYOK
-- **Per-user AI permissions** — off by default; admins (`SIAMTEX_ADMIN_GITHUB_LOGINS`) enable features per account
+- **Per-user AI permissions** — off by default; admins enable Chat / Assist / Fix / Create / BYOK per account in **AI access**
+- **Per-user AI token quotas** — optional caps set by administrators; usage tracked per user and site-wide
 - **Per-file version history** — branching undo tree, diff preview, restore
 
 Details: [SPECS.md](./SPECS.md) · AI architecture & BYOK: [AI.md](./AI.md)
@@ -230,14 +243,34 @@ Details: [SPECS.md](./SPECS.md) · AI architecture & BYOK: [AI.md](./AI.md)
 
 ## Install
 
+You do **not** need to read every guide cover-to-cover. The docs exist for humans **and** for coding agents (Cursor, Claude Code, Copilot, etc.) that can SSH into a server and run the steps for you.
+
+### Easiest path: let an agent install it
+
+1. Create a Linux VPS (e.g. [DigitalOcean](https://www.digitalocean.com/)) and add your SSH key.
+2. Open an AI agent with **shell access** to the droplet.
+3. Paste a prompt like:
+
+> Read [AGENTS.md](./AGENTS.md) (or [INSTALL_DO.md](./INSTALL_DO.md) for DigitalOcean) and install SiamTeX on this server.  
+> Web URL: `https://YOUR_DOMAIN/siamtex`  
+> I want GitHub OAuth (or solo mode). For AI I will use **Ollama over Tailscale** / **OpenAI** / **none** — ask me before writing API keys.  
+> Do not commit secrets.
+
+The agent should follow [AGENTS.md](./AGENTS.md) or [INSTALL_DO.md](./INSTALL_DO.md), configure [docs/ai-providers.md](./docs/ai-providers.md) if you want AI, and report back with the OAuth callback URL and smoke-test results. [AI.md](./AI.md) explains BYOK and architecture if the agent needs context.
+
+**Home Ollama (optional):** the same pattern works on your desktop — join Tailscale, install Ollama, point the droplet at your machine per [INSTALL_DO.md](./INSTALL_DO.md) §8 and [docs/tailscale-ollama.md](./docs/tailscale-ollama.md). Or skip home GPU and use a cloud API.
+
+**Manual install:** follow the guides yourself if you prefer — same files, more clicking.
+
 | Guide | Best for |
 |-------|----------|
 | **[INSTALL_DO.md](./INSTALL_DO.md)** | **DigitalOcean** — prerequisites, DNS (any registrar), PHP/Apache/Docker, Certbot TLS, optional AI |
 | **[docs/ai-providers.md](./docs/ai-providers.md)** | **AI setup** — OpenAI, Gemini, Grok, OpenRouter/Claude, Ollama (any host) |
 | **[AGENTS.md](./AGENTS.md)** | Any Linux server — full runbook for AI coding agents |
+| **[AI.md](./AI.md)** | BYOK architecture, permissions, quotas (product context for agents) |
 | **[config/](./config/README.md)** | Sample vhost, env, `.htaccess`, php-fpm drop-in |
 
-**Cursor:** use the project skill `.cursor/skills/install-siamtex/` or paste the prompt from AGENTS.md.
+**Cursor:** use the project skill `.cursor/skills/install-siamtex/` or `@install-siamtex` so the agent loads the workflow automatically.
 
 **Requirements (compile server):** PHP 8.2+, Composer, Docker, **2 GB+ RAM**, **40 GB+ disk** ([SPECS.md §6.2](./SPECS.md)). AI inference is optional and typically runs elsewhere.
 

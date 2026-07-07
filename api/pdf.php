@@ -56,8 +56,9 @@ try {
     }
 
     $downloadName = preg_replace('/\.tex$/i', '', $entry) . '.pdf';
+    $asDownload = isset($_GET['download']) && $_GET['download'] !== '' && $_GET['download'] !== '0';
     header('Content-Type: application/pdf');
-    header('Content-Disposition: inline; filename="' . $downloadName . '"');
+    header('Content-Disposition: ' . ($asDownload ? 'attachment' : 'inline') . '; filename="' . $downloadName . '"');
     header('Cache-Control: private, no-store');
     header('X-Content-Type-Options: nosniff');
     echo $pdf;

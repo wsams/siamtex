@@ -1,0 +1,8 @@
+{
+  "id": "book",
+  "name": "Book",
+  "description": "Multi-chapter book with front matter, table of contents, appendix, and bibliography.",
+  "category": "academic",
+  "mainFile": "main.tex",
+  "engine": "pdflatex"
+}

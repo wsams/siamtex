@@ -30,7 +30,8 @@ try {
         $name = trim((string) ($body['name'] ?? 'Untitled'));
         $template = (string) ($body['template'] ?? 'blank');
         $engine = (string) ($body['engine'] ?? 'pdflatex');
-        $project = stx_projects()->create($user, $name !== '' ? $name : 'Untitled', $template, $engine);
+        $defaultModel = stx_ai()->userDefaultConfig((int) $user['id'])->model;
+        $project = stx_projects()->create($user, $name !== '' ? $name : 'Untitled', $template, $engine, $defaultModel);
         stx_json(['project' => $project], 201);
     }
 

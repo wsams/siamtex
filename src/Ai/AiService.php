@@ -40,6 +40,49 @@ final class AiService
         return AiConfig::forUser($row ?: null);
     }
 
+    public function userDefaultConfig(int $userId): AiConfig
+    {
+        return $this->configForUser($userId);
+    }
+
+    public function configForProject(int $userId, ?string $projectId): AiConfig
+    {
+        $base = $this->userDefaultConfig($userId);
+        if ($projectId === null || $projectId === '') {
+            return $base;
+        }
+        $project = $this->projects->getProject($projectId);
+        if ($project === null) {
+            return $base;
+        }
+        $model = trim((string) ($project['ai_model'] ?? ''));
+        if ($model === '') {
+            return $base;
+        }
+        if ($model === $base->model) {
+            return $base;
+        }
+        return $base->withModel($model);
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function listModels(int $userId, ?string $projectId = null): array
+    {
+        $config = $projectId !== null && $projectId !== ''
+            ? $this->configForProject($userId, $projectId)
+            : $this->userDefaultConfig($userId);
+        if (!$config->enabled || $config->baseUrl === '') {
+            return $config->model !== '' ? [$config->model] : [];
+        }
+        try {
+            return $this->client->listModels($config);
+        } catch (\Throwable) {
+            return $config->model !== '' ? [$config->model] : [];
+        }
+    }
+
     /** @param array<string, mixed> $user */
     private function requireAi(array $user, string $feature): void
     {
@@ -48,6 +91,7 @@ final class AiService
 
     public function assertRateLimit(int $userId): void
     {
+        $this->permissions->assertWithinTokenQuota($userId);
         $since = gmdate('c', time() - 3600);
         $st = $this->store->pdo()->prepare('SELECT COUNT(*) FROM ai_calls WHERE user_id = ? AND created_at >= ?');
         $st->execute([$userId, $since]);
@@ -176,7 +220,7 @@ final class AiService
      * @param array{projectName?:string, engine?:string, activeFile?:string} $context
      * @param list<string> $attachTokens Paths or @tokens (main.tex, active, selection)
      * @param array{path?:string, text?:string}|null $selection
-     * @return array{content:string, usage:array, usageTotals:array, attachedFiles:list<string>}
+     * @return array{content:string, reasoning:string, usage:array, usageTotals:array, attachedFiles:list<string>}
      */
     public function generalChatStream(
         array $user,
@@ -188,6 +232,7 @@ final class AiService
         callable $onDelta,
         callable $onUsage,
         ?callable $shouldAbort = null,
+        ?callable $onReasoningDelta = null,
     ): array {
         $normalized = self::normalizeChatMessages($messages);
         if ($normalized === []) {
@@ -201,7 +246,7 @@ final class AiService
 
         $this->requireAi($user, AiPermissions::CHAT);
 
-        $config = $this->configForUser((int) $user['id']);
+        $config = $this->configForProject((int) $user['id'], $projectId !== null && $projectId !== '' ? $projectId : null);
         $config->validate();
         $this->assertRateLimit((int) $user['id']);
 
@@ -238,6 +283,7 @@ final class AiService
             static function (AiUsage $u) use ($onUsage): void {
                 $onUsage($u);
             },
+            $onReasoningDelta,
         );
 
         $meta = $this->finalizeUsage(
@@ -249,6 +295,7 @@ final class AiService
 
         return array_merge([
             'content' => trim($chat->content),
+            'reasoning' => trim($chat->reasoning),
             'attachedFiles' => array_keys($attachedFiles),
         ], $meta);
     }
@@ -413,7 +460,7 @@ final class AiService
             throw new RuntimeException('Instruction is required.');
         }
         $project = $this->projects->requireRole($user, $projectId, ['owner', 'edit']);
-        $config = $this->configForUser((int) $user['id']);
+        $config = $this->configForProject((int) $user['id'], $projectId !== null && $projectId !== '' ? $projectId : null);
         $config->validate();
         $this->assertRateLimit((int) $user['id']);
 
@@ -460,7 +507,7 @@ final class AiService
             throw new RuntimeException('Instruction is required.');
         }
         $project = $this->projects->requireRole($user, $projectId, ['owner', 'edit']);
-        $config = $this->configForUser((int) $user['id']);
+        $config = $this->configForProject((int) $user['id'], $projectId !== null && $projectId !== '' ? $projectId : null);
         $config->validate();
         $this->assertRateLimit((int) $user['id']);
 
@@ -512,51 +559,21 @@ final class AiService
         callable $onUsage,
         ?callable $onDelta = null,
         ?callable $shouldAbort = null,
+        ?string $entryFile = null,
     ): array {
         $this->requireAi($user, AiPermissions::FIX_ERRORS);
         $project = $this->projects->requireRole($user, $projectId, ['owner', 'edit']);
-        $config = $this->configForUser((int) $user['id']);
+        $config = $this->configForProject((int) $user['id'], $projectId !== null && $projectId !== '' ? $projectId : null);
         $config->validate();
         $this->assertRateLimit((int) $user['id']);
 
-        $onStatus('Loading compile errors from the last build…');
-        $build = $this->projects->latestBuild($projectId);
-        if ($build === null) {
-            throw new RuntimeException('No build found. Compile the project first.');
-        }
+        $onStatus('Loading compile errors and full build log from the last build…');
+        $ctx = $this->prepareFixProblemsContext($project, $projectId, $entryFile);
+        $files = $ctx['files'];
+        $diagnostics = $ctx['diagnostics'];
+        $logText = $ctx['log'];
 
-        $diagnostics = array_values(array_filter(
-            $build['diagnostics'],
-            static fn ($d) => is_array($d) && (($d['severity'] ?? '') === 'error')
-        ));
-        if ($diagnostics === []) {
-            throw new RuntimeException('No compile errors in the last build.');
-        }
-
-        $listed = $this->projects->listFiles($projectId);
-        $main = (string) $project['main_file'];
-        $paths = [$main];
-        foreach ($diagnostics as $d) {
-            $paths[] = self::resolveDiagnosticPath($listed, $d['file'] ?? null, $main);
-        }
-        $paths = array_values(array_unique($paths));
-
-        $files = [];
-        $budget = Config::aiMaxContextChars();
-        foreach ($paths as $p) {
-            if (!preg_match('/\.(tex|bib|sty|cls)$/i', $p)) {
-                continue;
-            }
-            $text = $this->projects->readFile($project, $p);
-            if (strlen($text) > $budget) {
-                throw new RuntimeException('Affected files are too large for AI context. Fix one file at a time.');
-            }
-            $files[$p] = $text;
-            $budget -= strlen($text);
-        }
-
-        $logTail = substr((string) ($build['log'] ?? ''), -8000);
-        $messages = PromptBuilder::fixCompileProblems($files, $diagnostics, $logTail, (string) $project['engine']);
+        $messages = PromptBuilder::fixCompileProblems($files, $diagnostics, $logText, (string) $project['engine']);
         $onStatus('Waiting for model — tracking token usage while fixes are generated…');
         $chat = $this->client->chatWithProgress(
             $config,
@@ -593,7 +610,7 @@ final class AiService
         if (!in_array($engine, ['pdflatex', 'xelatex', 'lualatex'], true)) {
             $engine = 'pdflatex';
         }
-        $config = $this->configForUser((int) $user['id']);
+        $config = $this->userDefaultConfig((int) $user['id']);
         $config->validate();
         $this->assertRateLimit((int) $user['id']);
 
@@ -610,12 +627,14 @@ final class AiService
         );
         $parsed = AiResponseParser::parseNewProjectJson($chat->content, $chat->finishReason);
         $onStatus('Creating project files…');
+        $defaultModel = $this->userDefaultConfig((int) $user['id'])->model;
         $project = $this->projects->createFromAiFiles(
             $user,
             $nameHint !== '' ? $nameHint : $parsed['name'],
             $parsed['mainFile'],
             $parsed['engine'] !== '' ? $parsed['engine'] : $engine,
             $parsed['files'],
+            $defaultModel,
         );
         $meta = $this->finalizeUsage((int) $user['id'], 'create_project', (string) $project['id'], $chat->usage);
 
@@ -638,7 +657,7 @@ final class AiService
             throw new RuntimeException('Instruction is required.');
         }
         $project = $this->projects->requireRole($user, $projectId, ['owner', 'edit']);
-        $config = $this->configForUser((int) $user['id']);
+        $config = $this->configForProject((int) $user['id'], $projectId !== null && $projectId !== '' ? $projectId : null);
         $config->validate();
         $this->assertRateLimit((int) $user['id']);
 
@@ -669,7 +688,7 @@ final class AiService
             throw new RuntimeException('Instruction is required.');
         }
         $project = $this->projects->requireRole($user, $projectId, ['owner', 'edit']);
-        $config = $this->configForUser((int) $user['id']);
+        $config = $this->configForProject((int) $user['id'], $projectId !== null && $projectId !== '' ? $projectId : null);
         $config->validate();
         $this->assertRateLimit((int) $user['id']);
 
@@ -704,15 +723,33 @@ final class AiService
     /**
      * @return array{summary:string, files:array<string, string>, notes:list<string>}
      */
-    public function fixProblems(array $user, string $projectId): array
+    public function fixProblems(array $user, string $projectId, ?string $entryFile = null): array
     {
         $this->requireAi($user, AiPermissions::FIX_ERRORS);
         $project = $this->projects->requireRole($user, $projectId, ['owner', 'edit']);
-        $config = $this->configForUser((int) $user['id']);
+        $config = $this->configForProject((int) $user['id'], $projectId !== null && $projectId !== '' ? $projectId : null);
         $config->validate();
         $this->assertRateLimit((int) $user['id']);
 
-        $build = $this->projects->latestBuild($projectId);
+        $ctx = $this->prepareFixProblemsContext($project, $projectId, $entryFile);
+        $files = $ctx['files'];
+        $diagnostics = $ctx['diagnostics'];
+        $logText = $ctx['log'];
+
+        $messages = PromptBuilder::fixCompileProblems($files, $diagnostics, $logText, (string) $project['engine']);
+        $chat = $this->client->chat($config, $messages);
+        $this->finalizeUsage((int) $user['id'], 'fix_problems', $projectId, $chat->usage);
+
+        return AiResponseParser::parseMultiFileJson($chat->content, $chat->finishReason, $files);
+    }
+
+    /**
+     * @param array<string, mixed> $project
+     * @return array{files: array<string, string>, diagnostics: list<array<string, mixed>>, log: string, build: array}
+     */
+    private function prepareFixProblemsContext(array $project, string $projectId, ?string $entryFile = null): array
+    {
+        $build = $this->projects->latestBuild($projectId, $entryFile);
         if ($build === null) {
             throw new RuntimeException('No build found. Compile the project first.');
         }
@@ -747,12 +784,37 @@ final class AiService
             $budget -= strlen($text);
         }
 
-        $logTail = substr((string) ($build['log'] ?? ''), -8000);
-        $messages = PromptBuilder::fixCompileProblems($files, $diagnostics, $logTail, (string) $project['engine']);
-        $chat = $this->client->chat($config, $messages);
-        $this->finalizeUsage((int) $user['id'], 'fix_problems', $projectId, $chat->usage);
+        $logBudget = max(12000, min((int) (Config::aiMaxContextChars() / 3), $budget));
+        $logText = self::buildLogForAi((string) ($build['log'] ?? ''), $logBudget);
 
-        return AiResponseParser::parseMultiFileJson($chat->content, $chat->finishReason, $files);
+        return [
+            'files' => $files,
+            'diagnostics' => $diagnostics,
+            'log' => $logText,
+            'build' => $build,
+        ];
+    }
+
+    private static function buildLogForAi(string $log, int $maxChars): string
+    {
+        if ($log === '' || $maxChars <= 0) {
+            return '';
+        }
+        $len = strlen($log);
+        if ($len <= $maxChars) {
+            return $log;
+        }
+        $notice = '[... build log truncated — showing last '
+            . number_format(max(0, $maxChars - 160))
+            . ' of ' . number_format($len) . " characters; error details are usually near the end ...]\n";
+        $budget = max(4000, $maxChars - strlen($notice));
+        $tail = substr($log, -$budget);
+        $nl = strpos($tail, "\n");
+        if ($nl !== false && $nl < 200) {
+            $tail = substr($tail, $nl + 1);
+        }
+
+        return $notice . $tail;
     }
 
     /**

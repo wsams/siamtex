@@ -82,6 +82,7 @@ SQL);
             'name' => $p['name'],
             'mainFile' => $p['main_file'],
             'engine' => $p['engine'],
+            'aiModel' => trim((string) ($p['ai_model'] ?? '')),
             'role' => $p['role'] ?? $p['_role'] ?? null,
             'shareToken' => !empty($p['share_token']) ? $p['share_token'] : null,
             'shareRole' => $p['share_role'] ?? null,
@@ -167,7 +168,7 @@ SQL);
         return $main;
     }
 
-    public function create(array $user, string $name, string $templateId = 'blank', string $engine = 'pdflatex'): array
+    public function create(array $user, string $name, string $templateId = 'blank', string $engine = 'pdflatex', ?string $aiModel = null): array
     {
         $manifest = Templates::manifest($templateId);
         $main = (string) ($manifest['mainFile'] ?? 'main.tex');
@@ -177,13 +178,16 @@ SQL);
         if (!in_array($engine, ['pdflatex', 'xelatex', 'lualatex'], true)) {
             $engine = 'pdflatex';
         }
+        $aiModel = trim((string) ($aiModel ?? ''));
 
         $id = Store::newId();
         $now = Store::now();
         $key = Crypto::generateProjectKey();
         $wrapped = Crypto::wrapProjectKey($key);
-        $st = $this->store->pdo()->prepare('INSERT INTO projects (id, owner_id, name, main_file, engine, wrapped_key, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)');
-        $st->execute([$id, $user['id'], $name, $main, $engine, $wrapped, $now, $now]);
+        $st = $this->store->pdo()->prepare(
+            'INSERT INTO projects (id, owner_id, name, main_file, engine, ai_model, wrapped_key, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)'
+        );
+        $st->execute([$id, $user['id'], $name, $main, $engine, $aiModel !== '' ? $aiModel : null, $wrapped, $now, $now]);
 
         $dir = $this->projectDir($id);
         mkdir($dir . '/files', 0770, true);
@@ -203,9 +207,9 @@ SQL);
     /**
      * @param array<string, string> $files
      */
-    public function createFromAiFiles(array $user, string $name, string $mainFile, string $engine, array $files): array
+    public function createFromAiFiles(array $user, string $name, string $mainFile, string $engine, array $files, ?string $aiModel = null): array
     {
-        $project = $this->create($user, $name, 'blank', $engine);
+        $project = $this->create($user, $name, 'blank', $engine, $aiModel);
         $id = (string) $project['id'];
         $mainFile = $this->safePath($mainFile);
         if ($mainFile !== (string) $project['mainFile'] || $engine !== (string) $project['engine']) {
@@ -221,20 +225,46 @@ SQL);
         return $project;
     }
 
+    public function ensureAiModel(string $projectId, string $defaultModel): ?array
+    {
+        $project = $this->getProject($projectId);
+        if ($project === null) {
+            return null;
+        }
+        if (trim((string) ($project['ai_model'] ?? '')) !== '') {
+            return $project;
+        }
+        $defaultModel = trim($defaultModel);
+        if ($defaultModel === '') {
+            return $project;
+        }
+        $st = $this->store->pdo()->prepare('UPDATE projects SET ai_model=?, updated_at=? WHERE id=?');
+        $st->execute([$defaultModel, Store::now(), $projectId]);
+        return $this->getProject($projectId);
+    }
+
     public function updateMeta(array $user, string $projectId, array $patch): array
     {
         $p = $this->requireRole($user, $projectId, ['owner', 'edit']);
         $name = array_key_exists('name', $patch) ? trim((string) $patch['name']) : $p['name'];
         $main = array_key_exists('mainFile', $patch) ? $this->safePath((string) $patch['mainFile']) : $p['main_file'];
         $engine = array_key_exists('engine', $patch) ? (string) $patch['engine'] : $p['engine'];
+        $aiModel = array_key_exists('aiModel', $patch)
+            ? trim((string) $patch['aiModel'])
+            : trim((string) ($p['ai_model'] ?? ''));
         if (!in_array($engine, ['pdflatex', 'xelatex', 'lualatex'], true)) {
             throw new RuntimeException('Invalid engine.');
         }
         if ($name === '') {
             throw new RuntimeException('Name required.');
         }
-        $st = $this->store->pdo()->prepare('UPDATE projects SET name=?, main_file=?, engine=?, updated_at=? WHERE id=?');
-        $st->execute([$name, $main, $engine, Store::now(), $projectId]);
+        if (array_key_exists('aiModel', $patch) && $aiModel === '') {
+            throw new RuntimeException('Model is required.');
+        }
+        $st = $this->store->pdo()->prepare(
+            'UPDATE projects SET name=?, main_file=?, engine=?, ai_model=?, updated_at=? WHERE id=?'
+        );
+        $st->execute([$name, $main, $engine, $aiModel !== '' ? $aiModel : null, Store::now(), $projectId]);
         return $this->publicProject($this->getProject($projectId) + ['_role' => $p['_role']]);
     }
 

@@ -38,6 +38,11 @@ try {
             stx_sse_send('delta', ['text' => $text]);
         }
     };
+    $sendReasoning = static function (string $text): void {
+        if ($text !== '') {
+            stx_sse_send('reasoning', ['text' => $text]);
+        }
+    };
 
     if ($mode === 'create_project') {
         $prompt = (string) ($body['prompt'] ?? $instruction);
@@ -97,6 +102,7 @@ try {
     }
 
     if ($mode === 'fix_problems') {
+        $entry = trim((string) ($body['entry'] ?? ''));
         $result = $ai->fixProblemsStream(
             $user,
             $projectId,
@@ -104,6 +110,7 @@ try {
             $sendUsage,
             $sendDelta,
             $abort,
+            $entry !== '' ? $entry : null,
         );
         stx_sse_send('done', [
             'mode' => 'fix_problems',
@@ -134,10 +141,12 @@ try {
             $sendDelta,
             $sendUsage,
             $abort,
+            $sendReasoning,
         );
         stx_sse_send('done', [
             'mode' => 'chat',
             'message' => $result['content'],
+            'reasoning' => $result['reasoning'] ?? '',
             'attachedFiles' => $result['attachedFiles'] ?? [],
             'usage' => $result['usage'],
             'usageTotals' => $result['usageTotals'],

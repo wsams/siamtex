@@ -157,6 +157,8 @@ Dashboard flow: natural-language description → model returns project file tree
 
 **Default:** all off for new users. **Admins:** GitHub logins in `SIAMTEX_ADMIN_GITHUB_LOGINS` get full access and the **AI access** admin UI (`api/admin_ai_access.php`). Sync with `scripts/sync-ai-admins.php`.
 
+**Token quotas:** optional per-user lifetime caps in **AI access** (empty = unlimited). Enforced before each AI request; panel shows per-user usage and site-wide totals.
+
 ---
 
 ## 5. Prompt / response contract

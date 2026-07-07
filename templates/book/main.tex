@@ -1,0 +1,29 @@
+\documentclass[11pt,twoside,openright]{book}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{natbib}
+
+\title{Book Title}
+\author{Author Name}
+\date{\today}
+
+\begin{document}
+
+\frontmatter
+\input{frontmatter.tex}
+
+\mainmatter
+\include{intro}
+\include{chapter1}
+\include{chapter2}
+
+\appendix
+\include{appendix}
+
+\backmatter
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}

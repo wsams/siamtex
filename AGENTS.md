@@ -103,7 +103,7 @@ Compiles: PHP decrypts → temp dir → `docker run --network=none … latexmk` 
 
 **Optional AI:** PHP proxies chat completions to the configured provider (Ollama, OpenAI, Gemini, Grok, OpenRouter, etc.). The UI uses **`api/ai_stream.php`** (Server-Sent Events) for live progress during assist, fix-problems, chat, and create-project; **`api/ai_complete.php`** remains a buffered JSON fallback. See [docs/ai-providers.md](./docs/ai-providers.md). Agents must ask which provider — do not assume home Ollama. **AI features are alpha/experimental;** set expectations that model choice drives accuracy. **Ollama:** single-file streaming uses plain LaTeX (no `format: json`); multi-file and fix-problems keep JSON mode and show status/char counts only.
 
-**AI access control (multi-user hosts):** new users have **all AI features off** until an administrator enables them. Set `SIAMTEX_ADMIN_GITHUB_LOGINS` (comma-separated GitHub usernames) in `/etc/siamtex.env`; those users get full AI access and the **AI access** admin panel. After env changes, run `php scripts/sync-ai-admins.php` (or sign in once so `auth_me.php` syncs). Features: `chat`, `createProject`, `assist`, `fixErrors`, `settings` (BYOK).
+**AI access control (multi-user hosts):** new users have **all AI features off** until an administrator enables them. Set `SIAMTEX_ADMIN_GITHUB_LOGINS` (comma-separated GitHub usernames) in `/etc/siamtex.env`; those users get full AI access and the **AI access** admin panel (per-user features, **token quotas**, usage per user and site-wide). After env changes, run `php scripts/sync-ai-admins.php` (or sign in once so `auth_me.php` syncs). Features: `chat`, `createProject`, `assist`, `fixErrors`, `settings` (BYOK).
 
 ---
 

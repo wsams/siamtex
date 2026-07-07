@@ -95,7 +95,7 @@ All go in `/etc/siamtex.env` (mode `640`, root:www-data). Loaded by PHP-FPM — 
 | `SIAMTEX_AI_MAX_CALLS_PER_HOUR` | Optional | Per-user rate limit (default `20`) |
 | `SIAMTEX_ADMIN_GITHUB_LOGINS` | Optional | Comma-separated GitHub usernames with **full AI access** and **AI access** admin UI to enable features for others |
 
-After setting admins, run `php scripts/sync-ai-admins.php` from the app root (or have each admin sign in once). **New users have all AI features disabled** until an admin enables them in **AI access**.
+After setting admins, run `php scripts/sync-ai-admins.php` from the app root (or have each admin sign in once). **New users have all AI features disabled** until an admin enables them in **AI access**. Optional **per-user token quotas** (blank = unlimited) are set in the same panel; usage is shown per user and site-wide.
 
 Copy-paste blocks are in [config/siamtex.env.example](../config/siamtex.env.example).
 
@@ -237,6 +237,7 @@ Keys are encrypted at rest with the app master key. The UI may not expose a sett
 | HTTP 401 | Bad or missing API key | Rotate key in env |
 | User sees no Chat / AI buttons | Permissions off by default | Admin enables features in **AI access**; or add login to `SIAMTEX_ADMIN_GITHUB_LOGINS` |
 | Admin has no **AI access** menu | Not in `SIAMTEX_ADMIN_GITHUB_LOGINS` or DB not synced | Set env; `php scripts/sync-ai-admins.php`; sign in again |
+| AI token quota reached | User at or over per-user cap | Raise quota in **AI access** or leave blank for unlimited |
 
 ---
 

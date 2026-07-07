@@ -29,6 +29,11 @@ try {
         $aiPermissions = stx_ai_permissions()->forUser($uid);
         $aiEnabled = $serverAi && !empty($aiPermissions['any']);
         $aiUsage = stx_ai()->usageSummaryForUser($uid);
+        $tokenQuota = stx_ai_permissions()->tokenQuotaForUser($uid);
+        if ($tokenQuota !== null) {
+            $aiUsage['tokenQuota'] = $tokenQuota;
+            $aiUsage['quotaRemaining'] = max(0, $tokenQuota - $aiUsage['totalTokens']);
+        }
 
         if ($aiEnabled) {
             if (!empty($aiPermissions['settings'])) {

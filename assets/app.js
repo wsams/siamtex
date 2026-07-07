@@ -13,6 +13,7 @@
     aiPermissions: null,
     isAdmin: false,
     aiConfig: null,
+    aiModels: [],
     aiUsage: null,
     projects: [],
     templates: [],
@@ -25,6 +26,8 @@
     build: null,
     buildsByEntry: {},
     problemsTab: 'problems',
+    problemsExpanded: false,
+    paneLayout: loadPaneLayout(),
     shareToken: null,
     editor: null,
     editorTheme: localStorage.getItem('siamtex_editor_theme') || 'material-darker',
@@ -32,6 +35,11 @@
     autoTimer: null,
     compiling: false,
     chatOpen: false,
+    chatMode: localStorage.getItem('siamtex_chat_mode') !== 'ask' ? 'edit' : 'ask',
+    chatPresetCategory: localStorage.getItem('siamtex_chat_preset_cat') || 'polish',
+    chatSelectedPresetId: localStorage.getItem('siamtex_chat_preset_id') || 'grammar',
+    chatAutoApply: localStorage.getItem('siamtex_chat_auto_apply') !== '0',
+    chatEditTarget: '',
     chatMessages: [],
     chatBusy: false,
     chatAbort: null,
@@ -84,9 +92,121 @@
     return (b / (1024 * 1024)).toFixed(1) + ' MB';
   }
 
+  function formatRelativeTime(iso) {
+    if (!iso) return '';
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(t)) return '';
+    const diff = Date.now() - t;
+    const sec = Math.floor(diff / 1000);
+    if (sec < 45) return 'just now';
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 36) return `${hr}h ago`;
+    const day = Math.floor(hr / 24);
+    if (day < 14) return `${day}d ago`;
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+  function templateIcon(category) {
+    const c = String(category || '').toLowerCase();
+    if (c === 'school') return '📝';
+    if (c === 'academic') return '📚';
+    if (c === 'career') return '📋';
+    return '📄';
+  }
+
+  function filterDashboardProjects() {
+    const q = (document.getElementById('dashProjectSearch')?.value || '').trim().toLowerCase();
+    let visible = 0;
+    document.querySelectorAll('.project-row').forEach((row) => {
+      const hay = row.getAttribute('data-search') || '';
+      const show = !q || hay.includes(q);
+      row.hidden = !show;
+      if (show) visible += 1;
+    });
+    const noMatch = document.getElementById('dashProjectNoMatch');
+    if (noMatch) noMatch.classList.toggle('hidden', visible > 0 || !q);
+  }
+
   function aiTimeoutSeconds() {
     const n = Number(state.aiConfig?.timeoutSeconds);
     return Number.isFinite(n) && n > 10 ? n : 180;
+  }
+
+  function effectiveAiModel() {
+    return state.project?.aiModel || state.aiConfig?.model || '';
+  }
+
+  function effectiveAiConfig() {
+    const base = state.aiConfig || {};
+    const model = effectiveAiModel();
+    return { ...base, model: model || base.model || '' };
+  }
+
+  async function loadAiModels() {
+    if (!state.aiEnabled) {
+      state.aiModels = [];
+      return;
+    }
+    try {
+      const q = state.project?.id ? `?projectId=${encodeURIComponent(state.project.id)}` : '';
+      const data = await api('/api/ai_models.php' + q);
+      state.aiModels = Array.isArray(data.models) ? data.models : [];
+      const current = data.current || effectiveAiModel();
+      if (current && !state.aiModels.includes(current)) {
+        state.aiModels.unshift(current);
+      }
+    } catch {
+      const cur = effectiveAiModel();
+      state.aiModels = cur ? [cur] : [];
+    }
+  }
+
+  function renderAiModelOptionList(selected) {
+    const models = [...(state.aiModels || [])];
+    if (selected && !models.includes(selected)) models.unshift(selected);
+    const seen = new Set();
+    return models.filter((m) => {
+      if (!m || seen.has(m)) return false;
+      seen.add(m);
+      return true;
+    }).map((m) => `<option value="${esc(m)}"${m === selected ? ' selected' : ''}>${esc(m)}</option>`).join('');
+  }
+
+  function renderProjAiModelSelect() {
+    const sel = document.getElementById('projAiModel');
+    if (!sel) return;
+    const current = effectiveAiModel();
+    sel.innerHTML = renderAiModelOptionList(current);
+    if (current) sel.value = current;
+  }
+
+  async function refreshProjAiModelSelect() {
+    await loadAiModels();
+    renderProjAiModelSelect();
+  }
+
+  function wireProjAiModel() {
+    const sel = document.getElementById('projAiModel');
+    if (!sel || sel.dataset.wired) return;
+    sel.dataset.wired = '1';
+    sel.addEventListener('change', async () => {
+      if (!state.project || !canEditProject(state.project)) return;
+      const model = sel.value;
+      try {
+        const data = await api('/api/project.php?id=' + encodeURIComponent(state.project.id), {
+          method: 'PATCH',
+          json: { aiModel: model },
+        });
+        state.project = data.project;
+        updateAiChatChrome();
+        toast(`Project model: ${model}`, 'ok');
+      } catch (e) {
+        toast(e.message, 'error');
+        renderProjAiModelSelect();
+      }
+    });
   }
 
   function formatAiDuration(totalSec) {
@@ -132,13 +252,23 @@
     const el = document.getElementById('aiUsageGlobal');
     if (!el || !state.aiEnabled) return;
     const u = state.aiUsage;
-    if (!u || !u.totalTokens) {
+    if (!u || (!u.totalTokens && !u.tokenQuota)) {
       el.classList.add('hidden');
       return;
     }
     el.classList.remove('hidden');
-    el.textContent = `AI ${formatTokens(u.totalTokens)} tok`;
-    el.title = `Your account: ${formatTokens(u.promptTokens)} prompt + ${formatTokens(u.completionTokens)} completion tokens across ${u.callCount} call(s)`;
+    const quota = u.tokenQuota > 0 ? u.tokenQuota : null;
+    const quotaLabel = quota ? ` / ${formatTokens(quota)}` : '';
+    el.textContent = `AI ${formatTokens(u.totalTokens)}${quotaLabel} tok`;
+    const remain = quota ? ` · ${formatTokens(u.quotaRemaining ?? 0)} left` : '';
+    el.title = `Your account: ${formatTokens(u.promptTokens)} prompt + ${formatTokens(u.completionTokens)} completion across ${u.callCount} call(s)${remain}`;
+  }
+
+  function formatQuotaUsage(usage, quota) {
+    const used = formatTokens(usage?.totalTokens || 0);
+    if (!quota || quota <= 0) return `${used} / ∞`;
+    const pct = Math.min(100, Math.round(((usage?.totalTokens || 0) / quota) * 100));
+    return `${used} / ${formatTokens(quota)} (${pct}%)`;
   }
 
   function renderProjectAiUsage() {
@@ -164,7 +294,7 @@
    */
   function createAiWait(mount, opts = {}) {
     const timeout = aiTimeoutSeconds();
-    const model = state.aiConfig?.model || 'AI model';
+    const model = effectiveAiModel() || 'AI model';
     const streaming = !!opts.streaming;
     const phases = opts.phases || [
       `Connecting to ${model}…`,
@@ -397,6 +527,7 @@
     if (!data) return;
     const payload = JSON.parse(data);
     if (event === 'delta') wait.appendStream(payload.text || '');
+    else if (event === 'reasoning') wait.appendReasoning?.(payload.text || '');
     else if (event === 'status') wait.setPhase(payload.message || 'Working…');
     else if (event === 'progress' && payload.usage) wait.setTokenUsage(payload.usage);
     else if (event === 'done') onDone(payload);
@@ -463,7 +594,75 @@
     }
   }
 
-  /* ---------- General AI chat panel (Open WebUI–style Q&A) ---------- */
+  /* ---------- General AI chat panel (Q&A + structured edits) ---------- */
+
+  const AI_CHAT_PRESET_CATEGORIES = [
+    {
+      id: 'polish',
+      label: 'Polish',
+      presets: [
+        { id: 'grammar', label: 'Grammar', instruction: 'Fix grammar only. Preserve meaning, structure, and all LaTeX commands. Return valid LaTeX only — no markdown fences or commentary.' },
+        { id: 'spelling', label: 'Spelling', instruction: 'Fix spelling and typos only. Do not rephrase or change wording. Return valid LaTeX only.' },
+        { id: 'clarity', label: 'Clarity', instruction: 'Improve clarity and flow while keeping the same structure and sectioning. Return valid LaTeX only.' },
+        { id: 'concise', label: 'Concise', instruction: 'Make the writing more concise. Remove redundancy; keep all technical content. Return valid LaTeX only.' },
+        { id: 'formal', label: 'Formal', instruction: 'Rewrite in a formal academic tone suitable for a journal paper. Return valid LaTeX only.' },
+      ],
+    },
+    {
+      id: 'latex',
+      label: 'LaTeX',
+      presets: [
+        { id: 'fix-latex', label: 'Fix syntax', instruction: 'Fix LaTeX syntax and compilation issues. Return valid, compilable LaTeX only.' },
+        { id: 'captions', label: 'Captions', instruction: 'Improve figure and table captions for clarity and style. Return valid LaTeX only.' },
+        { id: 'math-notation', label: 'Math notation', instruction: 'Make mathematical notation consistent and idiomatic (amsmath-style). Return valid LaTeX only.' },
+        { id: 'refs', label: 'Cross-refs', instruction: 'Improve \\label, \\ref, and \\cite usage for consistency. Return valid LaTeX only.' },
+      ],
+    },
+    {
+      id: 'academic',
+      label: 'Academic',
+      presets: [
+        { id: 'peer-review', label: 'Peer review', instruction: 'Rewrite as if addressing thoughtful peer-review feedback: clearer claims, cautious wording, stronger transitions. Return valid LaTeX only.' },
+        { id: 'expand-methods', label: 'Expand methods', instruction: 'Expand the methods/experimental section with more precise detail while staying factual. Return valid LaTeX only.' },
+        { id: 'shorten-abstract', label: 'Short abstract', instruction: 'Shorten the abstract aggressively while preserving key results. Return valid LaTeX only.' },
+        { id: 'plain-summary', label: 'Plain summary', instruction: 'Add a brief plain-language summary paragraph at the top (as a comment block). Return valid LaTeX only.' },
+      ],
+    },
+    {
+      id: 'voices',
+      label: 'Voices',
+      presets: [
+        { id: 'hemingway', label: 'Hemingway', instruction: 'Rewrite in Ernest Hemingway\'s spare, direct prose style — short sentences, concrete nouns. Keep LaTeX structure valid.' },
+        { id: 'shakespeare', label: 'Shakespeare', instruction: 'Rewrite with Shakespearean flair — elevated diction and rhythm — while keeping technical accuracy and valid LaTeX.' },
+        { id: 'einstein', label: 'Einstein', instruction: 'Rewrite explaining ideas the way Albert Einstein might — intuitive, wonder-filled, yet precise. Valid LaTeX only.' },
+        { id: 'feynman', label: 'Feynman', instruction: 'Rewrite in Richard Feynman\'s conversational, first-principles teaching style. Valid LaTeX only.' },
+        { id: 'austen', label: 'Jane Austen', instruction: 'Rewrite with Jane Austen\'s wit and social observation applied to the subject matter. Keep valid LaTeX.' },
+        { id: 'attwood', label: 'Atwood', instruction: 'Rewrite with Margaret Atwood\'s sharp, observant narrative voice. Valid LaTeX only.' },
+      ],
+    },
+    {
+      id: 'fun',
+      label: 'Fun',
+      presets: [
+        { id: 'pirate', label: 'Pirate', instruction: 'Rewrite in enthusiastic pirate speak — arr, matey — but keep equations and LaTeX commands correct.' },
+        { id: 'yoda', label: 'Yoda', instruction: 'Rewrite in Yoda\'s speech pattern you must, yet valid LaTeX remain it shall.' },
+        { id: 'victorian', label: 'Victorian', instruction: 'Rewrite in ornate Victorian scholarly prose. Valid LaTeX only.' },
+        { id: 'genz', label: 'Gen Z', instruction: 'Rewrite with light Gen Z internet voice — still professional enough for a draft; valid LaTeX only.' },
+        { id: 'sports', label: 'Sports cast', instruction: 'Rewrite as an excited sports commentator calling the action of the research. Valid LaTeX only.' },
+        { id: 'noir', label: 'Film noir', instruction: 'Rewrite as hard-boiled film noir narration about the document\'s subject. Valid LaTeX only.' },
+      ],
+    },
+    {
+      id: 'people',
+      label: 'People',
+      presets: [
+        { id: 'colleague', label: 'Friendly colleague', instruction: 'Rewrite as a supportive colleague would — clear, warm, constructive. Valid LaTeX only.' },
+        { id: 'strict-prof', label: 'Strict professor', instruction: 'Rewrite as a demanding professor would insist — precise, rigorous, no hand-waving. Valid LaTeX only.' },
+        { id: 'tutor', label: 'Patient tutor', instruction: 'Rewrite for a student who is learning — define terms inline, gentle pacing. Valid LaTeX only.' },
+        { id: 'grant-writer', label: 'Grant writer', instruction: 'Rewrite to maximize impact for a grant proposal — outcomes, significance, bold opening. Valid LaTeX only.' },
+      ],
+    },
+  ];
 
   let aiChatMounted = false;
 
@@ -476,7 +675,10 @@
     try {
       const raw = localStorage.getItem(chatStorageKey());
       const data = raw ? JSON.parse(raw) : [];
-      state.chatMessages = Array.isArray(data) ? data.filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content) : [];
+      state.chatMessages = Array.isArray(data)
+        ? data.filter((m) => m && (m.role === 'user' || m.role === 'assistant')
+          && (m.content || m.reasoning || m.editResult))
+        : [];
     } catch {
       state.chatMessages = [];
     }
@@ -495,16 +697,24 @@
     if (state.project) {
       ctx.projectName = state.project.name || '';
       ctx.engine = state.project.engine || '';
-      if (state.activePath) ctx.activeFile = state.activePath;
+      ctx.activeFile = state.activePath || state.project.mainFile || '';
+      ctx.files = chatAttachableFiles();
     }
     return ctx;
   }
 
   function chatContextLabel() {
     if (!state.project) return 'General questions';
-    const parts = [state.project.name];
-    if (state.activePath) parts.push(state.activePath);
-    return parts.join(' · ');
+    const target = getChatEditTargetPath([]);
+    return `${state.project.name} · editing ${target || 'open a text file'}`;
+  }
+
+  function getChatEditTargetPath(attachPaths, explicitPath) {
+    if (explicitPath) return explicitPath;
+    const picked = document.getElementById('aiChatTargetFile')?.value
+      || state.chatEditTarget;
+    if (picked && picked !== '__active__') return picked;
+    return resolveChatEditPath(attachPaths);
   }
 
   function chatAttachableFiles() {
@@ -656,10 +866,50 @@
     return html || formatChatUserText(String(text ?? ''));
   }
 
-  function formatChatMessageBody(text, role) {
+  function splitThinkingBlocks(text) {
+    let answer = String(text ?? '');
+    const thinkingParts = [];
+    const blockRe = /<think(?:ing)?>\s*([\s\S]*?)\s*<\/think(?:ing)?>/gi;
+    answer = answer.replace(blockRe, (_, inner) => {
+      const chunk = String(inner || '').trim();
+      if (chunk) thinkingParts.push(chunk);
+      return '';
+    });
+    answer = answer.replace(/<reasoning>\s*([\s\S]*?)\s*<\/reasoning>/gi, (_, inner) => {
+      const chunk = String(inner || '').trim();
+      if (chunk) thinkingParts.push(chunk);
+      return '';
+    });
+    answer = answer.trim();
+    const openRe = /^\s*<think(?:ing)?>\s*([\s\S]*)$/i;
+    const openM = answer.match(openRe);
+    if (openM) {
+      thinkingParts.push(String(openM[1] || '').trim());
+      answer = '';
+    }
+    return { thinking: thinkingParts.join('\n\n'), answer };
+  }
+
+  function renderChatThinking(thinking, streaming) {
+    if (!thinking?.trim()) return '';
+    const body = esc(thinking).replace(/\n/g, '<br>');
+    const openAttr = streaming ? ' open' : '';
+    return `<details class="ai-chat-thinking"${openAttr}><summary>Thinking</summary><div class="ai-chat-thinking-body">${body}</div></details>`;
+  }
+
+  function formatChatMessageBody(text, role, reasoning = '', streaming = false) {
     if (role === 'assistant') {
-      const inner = renderChatMarkdownInner(text);
-      return `<div class="ai-chat-md">${inner}</div>`;
+      const split = splitThinkingBlocks(text || '');
+      const think = (reasoning || split.thinking || '').trim();
+      const answer = (split.answer || '').trim();
+      let html = '';
+      if (think) html += renderChatThinking(think, streaming);
+      if (answer) {
+        html += `<div class="ai-chat-md">${renderChatMarkdownInner(answer)}</div>`;
+      } else if (!think) {
+        html += `<div class="ai-chat-md">${renderChatMarkdownInner(text || '')}</div>`;
+      }
+      return html;
     }
     return formatChatUserText(text);
   }
@@ -668,27 +918,27 @@
     return formatChatMessageBody(text, 'assistant');
   }
 
-  function fillChatMessageBody(bodyEl, content, streaming) {
+  function fillChatMessageBody(bodyEl, content, streaming, reasoning = '') {
     if (!bodyEl) return;
     bodyEl.classList.toggle('ai-chat-msg-streaming', !!streaming);
-    bodyEl.innerHTML = formatChatMessageBody(content, 'assistant');
+    bodyEl.innerHTML = formatChatMessageBody(content, 'assistant', reasoning, streaming);
     wireChatMessageBody(bodyEl);
   }
 
-  function scheduleChatStreamRender(bodyEl, mount, content) {
+  function scheduleChatStreamRender(bodyEl, mount, content, reasoning = '') {
     if (!bodyEl) return;
     clearTimeout(chatStreamRenderTimer);
     chatStreamRenderTimer = setTimeout(() => {
-      fillChatMessageBody(bodyEl, content, true);
+      fillChatMessageBody(bodyEl, content, true, reasoning);
       if (mount) mount.scrollTop = mount.scrollHeight;
     }, 60);
   }
 
-  function flushChatStreamRender(bodyEl, mount, content) {
+  function flushChatStreamRender(bodyEl, mount, content, reasoning = '') {
     clearTimeout(chatStreamRenderTimer);
     chatStreamRenderTimer = null;
     if (!bodyEl) return;
-    fillChatMessageBody(bodyEl, content, false);
+    fillChatMessageBody(bodyEl, content, false, reasoning);
     if (mount) mount.scrollTop = mount.scrollHeight;
   }
 
@@ -725,6 +975,24 @@
         }
       });
     });
+    root?.querySelectorAll('.ai-chat-msg-apply').forEach((btn) => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', async () => {
+        const msgEl = btn.closest('.ai-chat-msg');
+        const idx = Number(msgEl?.getAttribute('data-msg-idx'));
+        const msg = Number.isFinite(idx) ? state.chatMessages[idx] : null;
+        if (!msg) return;
+        btn.disabled = true;
+        try {
+          await applyChatMessageEdit(msg);
+        } catch (e) {
+          toast(e.message || 'Could not apply', 'error');
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
   }
 
   /** @deprecated use formatChatMessageBody */
@@ -746,19 +1014,27 @@
       const fileHint = state.project
         ? '<p class="ai-chat-empty-hint">In a project, type <code>@main.tex</code> or <code>@active</code> to attach file contents. Use <code>@selection</code> for highlighted editor text.</p>'
         : '<p class="ai-chat-empty-hint">Open a project to attach files with <code>@filename</code>.</p>';
+      const editHint = state.project
+        ? '<p class="ai-chat-empty-hint">Pick a <strong>filter</strong> above and click <strong>Apply filter</strong> — edits apply to the target file automatically.</p>'
+        : '';
       mount.innerHTML = `<div class="ai-chat-empty">
-        <p>Chat with your configured model — Ollama, OpenAI, or another provider.</p>
+        <p>Your AI hub — ask questions, run quick edits, and apply changes to the editor.</p>
         ${fileHint}
-        <p class="ai-chat-empty-hint">Separate from the structured <strong>AI</strong> edit tools — this is Q&amp;A with optional project context.</p>
+        ${editHint}
       </div>`;
       return;
     }
-    mount.innerHTML = state.chatMessages.map((m) => `
-      <div class="ai-chat-msg ai-chat-msg-${m.role === 'user' ? 'user' : 'assistant'}">
-        <div class="ai-chat-msg-role">${m.role === 'user' ? 'You' : 'Assistant'}${m.role === 'assistant' && m.content ? '<button type="button" class="ghost ai-chat-msg-copy" title="Copy reply">Copy</button>' : ''}</div>
+    mount.innerHTML = state.chatMessages.map((m, i) => {
+      const usagePill = m.usage ? `<span class="ai-chat-msg-usage pill">${esc(formatTokenUsage(m.usage, { short: true }))}</span>` : '';
+      const appliedPill = m.autoApplied ? '<span class="pill ai-chat-applied-pill">Applied</span>' : '';
+      return `
+      <div class="ai-chat-msg ai-chat-msg-${m.role === 'user' ? 'user' : 'assistant'}" data-msg-idx="${i}">
+        <div class="ai-chat-msg-role">${m.role === 'user' ? 'You' : 'Assistant'}${usagePill}${appliedPill}</div>
         ${m.role === 'user' ? renderChatAttachedPills(m.attachedFiles) : ''}
-        <div class="ai-chat-msg-body">${formatChatMessageBody(m.content, m.role)}</div>
-      </div>`).join('');
+        <div class="ai-chat-msg-body">${formatChatMessageBody(m.content, m.role, m.reasoning || '')}</div>
+        ${chatMessageActionsHtml(m)}
+      </div>`;
+    }).join('');
     mount.scrollTop = mount.scrollHeight;
     wireChatMessageBody(mount);
   }
@@ -772,6 +1048,7 @@
     if (input) input.disabled = busy;
     if (stopBtn) stopBtn.classList.toggle('hidden', !busy);
     document.getElementById('aiChatPanel')?.classList.toggle('ai-chat-busy', busy);
+    renderAiMagicBar();
   }
 
   function toggleAiChatPanel(forceOpen) {
@@ -789,8 +1066,155 @@
       loadChatHistory();
       renderAiChatMessages();
       updateAiChatChrome();
-      document.getElementById('aiChatInput')?.focus();
+      renderAiMagicBar();
     }
+  }
+
+  function setChatMode(mode) {
+    state.chatMode = mode === 'edit' ? 'edit' : 'ask';
+    try { localStorage.setItem('siamtex_chat_mode', state.chatMode); } catch { /* */ }
+    document.querySelectorAll('.ai-chat-mode-btn').forEach((btn) => {
+      btn.classList.toggle('active', btn.getAttribute('data-mode') === state.chatMode);
+    });
+    const input = document.getElementById('aiChatInput');
+    if (input) {
+      input.placeholder = state.chatMode === 'edit' && hasAiEditInChat()
+        ? 'Describe edits for the target file… (@other.tex to switch files)'
+        : 'Ask about your project… Type @ to attach files';
+    }
+  }
+
+  function runAiChatPreset(preset, options = {}) {
+    if (!hasAiChat()) return;
+    if (!state.project) {
+      toast('Open a project first', 'error');
+      return;
+    }
+    if (!hasAiEditInChat()) {
+      toast('You need edit access on this project', 'error');
+      return;
+    }
+    const path = getChatEditTargetPath([]);
+    if (!path || isBinaryFile({ path })) {
+      toast('Open a .tex or text file to edit', 'error');
+      return;
+    }
+    toggleAiChatPanel(true);
+    const autoApply = options.autoApply ?? state.chatAutoApply;
+    sendAiChatMessage(`✦ ${preset.label} → ${path}`, {
+      preset,
+      forceEdit: true,
+      autoApply,
+      path,
+    });
+  }
+
+  function runAiMagicLucky() {
+    const pick = document.getElementById('aiChatPresetPick');
+    const presetId = pick?.value || state.chatSelectedPresetId;
+    const preset = chatPresetById(presetId);
+    if (!preset) {
+      toast('Choose a quick action from the menu', 'error');
+      return;
+    }
+    state.chatSelectedPresetId = presetId;
+    try { localStorage.setItem('siamtex_chat_preset_id', presetId); } catch { /* */ }
+    runAiChatPreset(preset, { autoApply: state.chatAutoApply });
+  }
+
+  function renderAiMagicBar() {
+    const magic = document.getElementById('aiChatMagic');
+    const catSel = document.getElementById('aiChatPresetCategory');
+    const pickSel = document.getElementById('aiChatPresetPick');
+    const targetSel = document.getElementById('aiChatTargetFile');
+    const luckyBtn = document.getElementById('aiChatLucky');
+    const autoChk = document.getElementById('aiChatAutoApply');
+    const usageEl = document.getElementById('aiChatMagicUsage');
+    if (!magic) return;
+
+    const show = !!(hasAiChat() && state.project);
+    magic.classList.toggle('hidden', !show);
+    document.getElementById('aiChatModeWrap')?.classList.toggle('hidden', !show);
+    if (!show) return;
+
+    const canEdit = hasAiEditInChat();
+    if (luckyBtn) {
+      luckyBtn.disabled = !canEdit || state.chatBusy;
+      luckyBtn.title = canEdit
+        ? 'Run the selected filter on the target file'
+        : 'Edit access required';
+    }
+    if (usageEl) {
+      const text = document.getElementById('aiChatUsage')?.textContent?.trim() || '';
+      usageEl.textContent = text || (state.chatBusy ? 'Working…' : '');
+      usageEl.classList.toggle('hidden', !text && !state.chatBusy);
+      usageEl.classList.toggle('busy', state.chatBusy);
+    }
+
+    if (autoChk) {
+      autoChk.checked = !!state.chatAutoApply;
+      autoChk.disabled = !canEdit;
+    }
+
+    if (targetSel) {
+      const paths = chatAttachableFiles();
+      const active = state.activePath || state.project?.mainFile || '';
+      const opts = [`<option value="__active__">@active (${esc(active || 'current file')})</option>`];
+      paths.forEach((p) => {
+        if (p !== active) opts.push(`<option value="${esc(p)}">${esc(p)}</option>`);
+      });
+      targetSel.innerHTML = opts.join('');
+      const saved = state.chatEditTarget;
+      targetSel.value = (saved && saved !== '__active__' && paths.includes(saved)) ? saved : '__active__';
+    }
+
+    if (!AI_CHAT_PRESET_CATEGORIES.some((c) => c.id === state.chatPresetCategory)) {
+      state.chatPresetCategory = AI_CHAT_PRESET_CATEGORIES[0]?.id || 'polish';
+    }
+
+    if (catSel) {
+      catSel.innerHTML = AI_CHAT_PRESET_CATEGORIES.map((cat) => (
+        `<option value="${esc(cat.id)}"${cat.id === state.chatPresetCategory ? ' selected' : ''}>${esc(cat.label)}</option>`
+      )).join('');
+    }
+
+    const activeCat = AI_CHAT_PRESET_CATEGORIES.find((c) => c.id === state.chatPresetCategory)
+      || AI_CHAT_PRESET_CATEGORIES[0];
+    if (pickSel) {
+      pickSel.innerHTML = (activeCat?.presets || []).map((p) => (
+        `<option value="${esc(p.id)}"${p.id === state.chatSelectedPresetId ? ' selected' : ''}>${esc(p.label)}</option>`
+      )).join('');
+      if (!pickSel.value && activeCat?.presets?.[0]) {
+        pickSel.value = activeCat.presets[0].id;
+        state.chatSelectedPresetId = activeCat.presets[0].id;
+      }
+    }
+  }
+
+  function wireAiMagicBar() {
+    if (wireAiMagicBar.done) return;
+    wireAiMagicBar.done = true;
+
+    document.getElementById('aiChatPresetCategory')?.addEventListener('change', (e) => {
+      state.chatPresetCategory = e.target.value || 'polish';
+      try { localStorage.setItem('siamtex_chat_preset_cat', state.chatPresetCategory); } catch { /* */ }
+      state.chatSelectedPresetId = '';
+      renderAiMagicBar();
+    });
+    document.getElementById('aiChatPresetPick')?.addEventListener('change', (e) => {
+      state.chatSelectedPresetId = e.target.value || '';
+      try { localStorage.setItem('siamtex_chat_preset_id', state.chatSelectedPresetId); } catch { /* */ }
+    });
+    document.getElementById('aiChatTargetFile')?.addEventListener('change', (e) => {
+      state.chatEditTarget = e.target.value || '';
+    });
+    document.getElementById('aiChatAutoApply')?.addEventListener('change', (e) => {
+      state.chatAutoApply = !!e.target.checked;
+      try {
+        localStorage.setItem('siamtex_chat_auto_apply', state.chatAutoApply ? '1' : '0');
+      } catch { /* */ }
+    });
+    document.getElementById('aiChatLucky')?.addEventListener('click', () => runAiMagicLucky());
   }
 
   function updateAiChatChrome() {
@@ -798,14 +1222,18 @@
     const ctxEl = document.getElementById('aiChatContext');
     const attachBtn = document.getElementById('aiChatAttachActive');
     const hintEl = document.getElementById('aiChatComposeHint');
-    if (modelEl) modelEl.textContent = state.aiConfig?.model || 'AI model';
+    if (modelEl) modelEl.textContent = effectiveAiModel() || 'AI model';
     if (ctxEl) ctxEl.textContent = chatContextLabel();
     if (attachBtn) attachBtn.classList.toggle('hidden', !state.project);
     if (hintEl) {
       hintEl.innerHTML = state.project
-        ? 'Type <code>@file</code> · <code>@active</code> · <code>@selection</code>'
+        ? (state.chatMode === 'edit' && hasAiEditInChat()
+          ? 'Edit mode — Send applies to target file (auto-apply when checked)'
+          : 'Ask mode — Q&amp;A with <code>@file</code> context')
         : 'Open a project to attach files with <code>@filename</code>';
     }
+    setChatMode(state.chatMode);
+    renderAiMagicBar();
     const empty = document.querySelector('.ai-chat-empty');
     if (empty && state.chatOpen && !state.chatMessages.length) {
       renderAiChatMessages();
@@ -838,6 +1266,7 @@
     let buffer = '';
     const wait = {
       appendStream(t) { handlers.onDelta?.(t); },
+      appendReasoning(t) { handlers.onReasoning?.(t); },
       setPhase() {},
       setTokenUsage(u) { handlers.onUsage?.(u); },
     };
@@ -859,9 +1288,152 @@
     return finalData;
   }
 
-  async function sendAiChatMessage(text) {
+  async function sendAiChatEditMessage(instruction, options = {}) {
+    const preset = options.preset;
+    const displayText = options.displayText || (preset ? `✦ ${preset.label}` : instruction);
+    const parsed = options.parsed || parseChatMentions(displayText);
+    const path = getChatEditTargetPath(parsed.attachPaths, options.path);
+
+    if (!path || isBinaryFile({ path })) {
+      toast('Open a .tex or text file to edit with AI', 'error');
+      return;
+    }
+
+    const autoApply = options.autoApply !== false && (options.autoApply ?? state.chatAutoApply);
+
+    state.chatMessages.push({
+      role: 'user',
+      content: displayText,
+      attachedFiles: [path],
+      presetId: preset?.id,
+    });
+    state.chatMessages.push({
+      role: 'assistant',
+      content: '',
+      reasoning: `Rewriting ${path}…`,
+      editResult: null,
+      editPath: path,
+    });
+    const assistantIdx = state.chatMessages.length - 1;
+    renderAiChatMessages();
+    saveChatHistory();
+
+    const ac = new AbortController();
+    state.chatAbort = ac;
+    setAiChatBusy(true);
+    renderAiMagicBar();
+
+    const mount = document.getElementById('aiChatMessages');
+    const bodyEl = mount?.querySelector('.ai-chat-msg:last-child .ai-chat-msg-body');
+    let streamBuf = '';
+    let lastUsage = null;
+
+    const renderStreaming = () => {
+      const msg = state.chatMessages[assistantIdx];
+      const think = msg.reasoning || '';
+      let html = '';
+      if (think) html += renderChatThinking(think, true);
+      if (streamBuf) {
+        html += `<pre class="ai-chat-edit-stream">${esc(streamBuf)}</pre>`;
+      }
+      if (bodyEl) {
+        bodyEl.classList.add('ai-chat-msg-streaming');
+        bodyEl.innerHTML = html;
+        mount.scrollTop = mount.scrollHeight;
+      }
+    };
+
+    try {
+      const data = await runAiChatStream({
+        mode: 'file',
+        projectId: state.project.id,
+        path,
+        instruction: instruction.trim(),
+      }, {
+        signal: ac,
+        onDelta(t) {
+          streamBuf += t;
+          state.chatMessages[assistantIdx].content = streamBuf;
+          renderStreaming();
+        },
+        onReasoning(t) {
+          state.chatMessages[assistantIdx].reasoning = (state.chatMessages[assistantIdx].reasoning || '') + t;
+          renderStreaming();
+        },
+        onUsage(u) {
+          lastUsage = u;
+          const el = document.getElementById('aiChatUsage');
+          if (el && u) el.textContent = formatTokenUsage(u, { short: true });
+          state.chatMessages[assistantIdx].reasoning = `Rewriting ${path}… ${formatTokenUsage(u, { short: true })}`;
+          renderStreaming();
+        },
+      });
+
+      const result = data.result || {};
+      const content = result.content || streamBuf;
+      state.chatMessages[assistantIdx].editResult = { mode: 'file', result: { ...result, path, content } };
+      state.chatMessages[assistantIdx].editPath = path;
+      state.chatMessages[assistantIdx].usage = data.usage || lastUsage;
+      const summary = result.summary || `Updated ${path}`;
+      state.chatMessages[assistantIdx].reasoning = `Done — ${summary}${data.usage ? ` · ${formatTokenUsage(data.usage, { short: true })}` : ''}`;
+      state.chatMessages[assistantIdx].content = `${summary}\n\n\`\`\`latex\n${content}\n\`\`\``;
+      applyAiUsageFromResponse(data);
+      saveChatHistory();
+      renderAiChatMessages();
+
+      if (autoApply && hasAiEditInChat()) {
+        try {
+          await applyChatMessageEdit(state.chatMessages[assistantIdx]);
+          state.chatMessages[assistantIdx].autoApplied = true;
+          saveChatHistory();
+          renderAiChatMessages();
+          toast(`✦ Applied to ${path}${data.usage ? ` — ${formatTokenUsage(data.usage)}` : ''}`, 'ok');
+          state.editor?.focus?.();
+        } catch (e) {
+          toast(`Edit ready — tap Replace in editor (${e.message})`, 'error');
+        }
+      } else {
+        toast('Edit ready — tap Replace in editor or turn on Auto-apply', 'ok');
+      }
+    } catch (e) {
+      if (e.name === 'AbortError' || e.message.includes('cancelled')) {
+        if (!state.chatMessages[assistantIdx].content) {
+          state.chatMessages.pop();
+          state.chatMessages.pop();
+        }
+      } else {
+        state.chatMessages[assistantIdx].content = state.chatMessages[assistantIdx].content
+          || `Error: ${e.message}`;
+        toast(e.message, 'error');
+      }
+      saveChatHistory();
+      renderAiChatMessages();
+    } finally {
+      state.chatAbort = null;
+      setAiChatBusy(false);
+      renderAiMagicBar();
+      const usageEl = document.getElementById('aiChatUsage');
+      if (usageEl) usageEl.textContent = '';
+    }
+  }
+
+  async function sendAiChatMessage(text, options = {}) {
+    const preset = options.preset;
     const raw = String(text || '').trim();
-    if (!raw || state.chatBusy || !hasAiChat()) return;
+    const instruction = preset?.instruction || options.instruction || raw;
+    if (!instruction || state.chatBusy || !hasAiChat()) return;
+
+    const useEdit = !!(preset || options.forceEdit || (state.chatMode === 'edit' && hasAiEditInChat()));
+    if (useEdit && hasAiEditInChat()) {
+      await sendAiChatEditMessage(instruction, {
+        ...options,
+        preset,
+        parsed: parseChatMentions(raw || instruction),
+        displayText: raw || (preset ? `✦ ${preset.label}` : instruction),
+        autoApply: options.autoApply ?? state.chatAutoApply,
+      });
+      return;
+    }
 
     const parsed = parseChatMentions(raw);
     if (parsed.wantsSelection && !chatSelectionPayload(true)) {
@@ -885,7 +1457,7 @@
     const selection = chatSelectionPayload(parsed.wantsSelection);
 
     state.chatMessages.push({ role: 'user', content: parsed.text, attachedFiles: attachPaths });
-    state.chatMessages.push({ role: 'assistant', content: '' });
+    state.chatMessages.push({ role: 'assistant', content: '', reasoning: '' });
     const assistantIdx = state.chatMessages.length - 1;
     renderAiChatMessages();
     saveChatHistory();
@@ -910,7 +1482,23 @@
         onDelta(t) {
           state.chatMessages[assistantIdx].content += t;
           if (bodyEl) {
-            scheduleChatStreamRender(bodyEl, mount, state.chatMessages[assistantIdx].content);
+            scheduleChatStreamRender(
+              bodyEl,
+              mount,
+              state.chatMessages[assistantIdx].content,
+              state.chatMessages[assistantIdx].reasoning || '',
+            );
+          }
+        },
+        onReasoning(t) {
+          state.chatMessages[assistantIdx].reasoning = (state.chatMessages[assistantIdx].reasoning || '') + t;
+          if (bodyEl) {
+            scheduleChatStreamRender(
+              bodyEl,
+              mount,
+              state.chatMessages[assistantIdx].content,
+              state.chatMessages[assistantIdx].reasoning || '',
+            );
           }
         },
         onUsage(u) {
@@ -922,12 +1510,20 @@
       if (data.message && !state.chatMessages[assistantIdx].content) {
         state.chatMessages[assistantIdx].content = data.message;
       }
+      if (data.reasoning && !state.chatMessages[assistantIdx].reasoning) {
+        state.chatMessages[assistantIdx].reasoning = data.reasoning;
+      }
       if (data.attachedFiles?.length && state.chatMessages[assistantIdx - 1]) {
         state.chatMessages[assistantIdx - 1].attachedFiles = data.attachedFiles;
       }
       applyAiUsageFromResponse(data);
       saveChatHistory();
-      flushChatStreamRender(bodyEl, mount, state.chatMessages[assistantIdx].content);
+      flushChatStreamRender(
+        bodyEl,
+        mount,
+        state.chatMessages[assistantIdx].content,
+        state.chatMessages[assistantIdx].reasoning || '',
+      );
       renderAiChatMessages();
     } catch (e) {
       if (e.name === 'AbortError' || e.message.includes('cancelled')) {
@@ -1051,7 +1647,7 @@
     panel.innerHTML = `
       <header class="ai-chat-header">
         <div class="ai-chat-header-copy">
-          <strong>AI Chat</strong>
+          <strong>✦ AI</strong>
           <span id="aiChatModel" class="ai-chat-model"></span>
           <span id="aiChatContext" class="ai-chat-context"></span>
         </div>
@@ -1060,6 +1656,35 @@
           <button type="button" id="aiChatClose" class="ghost" title="Close panel">×</button>
         </div>
       </header>
+      <div class="ai-chat-magic" id="aiChatMagic">
+        <div class="ai-chat-magic-row">
+          <label class="ai-chat-magic-field">
+            <span class="ai-chat-magic-label">Target file</span>
+            <select id="aiChatTargetFile" title="File to rewrite — @active follows the editor"></select>
+          </label>
+          <label class="ai-chat-magic-field">
+            <span class="ai-chat-magic-label">Category</span>
+            <select id="aiChatPresetCategory"></select>
+          </label>
+          <label class="ai-chat-magic-field ai-chat-magic-field-grow">
+            <span class="ai-chat-magic-label">Filter</span>
+            <select id="aiChatPresetPick"></select>
+          </label>
+        </div>
+        <div class="ai-chat-magic-actions">
+          <button type="button" id="aiChatLucky" class="primary ai-sparkle-btn ai-chat-apply-btn">Apply filter</button>
+          <span id="aiChatMagicUsage" class="ai-chat-magic-usage hidden" aria-live="polite"></span>
+          <label class="ai-chat-auto-apply">
+            <input type="checkbox" id="aiChatAutoApply" checked />
+            <span>Auto-apply to editor</span>
+          </label>
+          <div class="ai-chat-mode" id="aiChatModeWrap" role="group" aria-label="Chat mode">
+            <button type="button" class="ai-chat-mode-btn" data-mode="edit">Edit</button>
+            <button type="button" class="ai-chat-mode-btn" data-mode="ask">Ask</button>
+          </div>
+        </div>
+        <p class="ai-chat-magic-hint">Defaults to the open editor file. Type <code>@chapter.tex</code> in the box below to target another file.</p>
+      </div>
       <div class="ai-chat-messages" id="aiChatMessages" role="log" aria-live="polite"></div>
       <form id="aiChatForm" class="ai-chat-compose">
         <div class="ai-chat-compose-top" id="aiChatComposeTop">
@@ -1067,7 +1692,7 @@
           <span class="ai-chat-compose-hint" id="aiChatComposeHint">Type <code>@file</code> in a project to attach sources</span>
         </div>
         <div class="ai-chat-input-wrap">
-          <textarea id="aiChatInput" rows="3" placeholder="Ask anything… Type @ to attach a project file"></textarea>
+          <textarea id="aiChatInput" rows="3" placeholder="Edit mode: describe changes for the target file…"></textarea>
           <div class="ai-chat-mention-menu hidden" id="aiChatMentionMenu" role="listbox"></div>
         </div>
         <div class="ai-chat-compose-actions">
@@ -1080,10 +1705,10 @@
     const fab = document.createElement('button');
     fab.type = 'button';
     fab.id = 'aiChatFab';
-    fab.className = 'ai-chat-fab';
-    fab.title = 'AI Chat';
+    fab.className = 'ai-chat-fab ai-sparkle-btn';
+    fab.title = 'AI — chat & edits';
     fab.setAttribute('aria-expanded', 'false');
-    fab.textContent = '💬';
+    fab.textContent = '✦';
 
     document.getElementById('app')?.append(panel, fab);
 
@@ -1104,6 +1729,11 @@
       input.focus();
       updateChatMentionMenu();
     });
+    document.querySelectorAll('.ai-chat-mode-btn').forEach((btn) => {
+      btn.addEventListener('click', () => setChatMode(btn.getAttribute('data-mode')));
+    });
+    wireAiMagicBar();
+    renderAiMagicBar();
     form?.addEventListener('submit', (e) => {
       e.preventDefault();
       if (!document.getElementById('aiChatMentionMenu')?.classList.contains('hidden')) return;
@@ -1417,8 +2047,66 @@
     return !!(state.aiEnabled && state.aiPermissions && state.aiPermissions[feature]);
   }
 
+  /** Structured AI assist (edit file / project) — included with chat access. */
+  function hasAiAssist() {
+    if (!state.aiEnabled || !state.project || !canEditProject(state.project)) return false;
+    if (state.isAdmin) return true;
+    return aiCan('assist') || aiCan('chat');
+  }
+
   function hasAiChat() {
     return aiCan('chat');
+  }
+
+  /** Structured edits in chat (file rewrites, presets, replace in editor). */
+  function hasAiEditInChat() {
+    if (!state.aiEnabled || !state.project || !canEditProject(state.project)) return false;
+    if (state.isAdmin) return true;
+    return aiCan('assist') || aiCan('chat');
+  }
+
+  function chatPresetById(id) {
+    for (const cat of AI_CHAT_PRESET_CATEGORIES) {
+      const hit = cat.presets.find((p) => p.id === id);
+      if (hit) return { ...hit, category: cat.label };
+    }
+    return null;
+  }
+
+  function resolveChatEditPath(attachPaths) {
+    if (attachPaths?.length) return attachPaths[0];
+    return state.activePath || state.project?.mainFile || null;
+  }
+
+  function extractChatApplyPayload(msg) {
+    if (!msg) return null;
+    if (msg.editResult?.mode === 'file' && msg.editResult.result?.content != null) {
+      return { mode: 'file', result: msg.editResult.result };
+    }
+    if (msg.editResult?.mode === 'project' && msg.editResult.result?.files) {
+      return { mode: 'project', result: msg.editResult.result };
+    }
+    if (msg.editResult?.mode === 'snippet' && msg.editResult.content != null) {
+      return msg.editResult;
+    }
+    const parts = splitChatMarkdown(msg.content || '');
+    const code = parts.find((p) => p.type === 'code' && /^(latex|tex|text)?$/i.test(p.lang || ''));
+    if (code && state.project) {
+      const path = msg.editPath || state.activePath || state.project.mainFile;
+      if (path) {
+        return { mode: 'file', result: { path, content: code.content, summary: 'From chat reply' } };
+      }
+    }
+    return null;
+  }
+
+  function chatMessageActionsHtml(m) {
+    if (m.role !== 'assistant' || (!m.content?.trim() && !m.editResult)) return '';
+    const canApply = hasAiEditInChat() && !!extractChatApplyPayload(m);
+    return `<div class="ai-chat-msg-actions">
+      <button type="button" class="ghost ai-chat-msg-copy" title="Copy reply">Copy</button>
+      ${canApply ? `<button type="button" class="primary ai-chat-msg-apply" title="Replace ${esc(m.editPath || state.activePath || 'editor')}">${m.autoApplied ? 'Re-apply to editor' : 'Replace in editor'}</button>` : ''}
+    </div>`;
   }
 
   function isCompileEntry(path) {
@@ -1442,10 +2130,188 @@
   }
 
   function updatePreviewLabel() {
-    const label = document.querySelector('.preview-pane .pane-label');
+    const label = document.getElementById('previewLabel');
     if (!label) return;
     const entry = previewEntry();
     label.textContent = `PDF preview — ${entry}`;
+  }
+
+  function loadPaneLayout() {
+    try {
+      const raw = JSON.parse(localStorage.getItem('siamtex_pane_layout') || '{}');
+      return {
+        split: typeof raw.split === 'number' ? Math.min(0.85, Math.max(0.15, raw.split)) : 0.5,
+        editorCollapsed: !!raw.editorCollapsed,
+        previewCollapsed: !!raw.previewCollapsed,
+      };
+    } catch {
+      return { split: 0.5, editorCollapsed: false, previewCollapsed: false };
+    }
+  }
+
+  function savePaneLayout() {
+    try {
+      localStorage.setItem('siamtex_pane_layout', JSON.stringify(state.paneLayout));
+    } catch {
+      /* quota */
+    }
+  }
+
+  function applyPaneLayout() {
+    const root = document.getElementById('splitPanes');
+    if (!root) return;
+    const L = state.paneLayout;
+    root.classList.toggle('editor-collapsed', L.editorCollapsed);
+    root.classList.toggle('preview-collapsed', L.previewCollapsed);
+    root.classList.toggle('both-collapsed', L.editorCollapsed && L.previewCollapsed);
+    root.style.setProperty('--editor-flex', String(L.editorCollapsed ? 0 : L.split * 1000));
+    root.style.setProperty('--preview-flex', String(L.previewCollapsed ? 0 : (1 - L.split) * 1000));
+    const splitter = document.getElementById('paneSplitter');
+    if (splitter) splitter.setAttribute('aria-valuenow', String(Math.round(L.split * 100)));
+    if (state.editor?.refresh) {
+      requestAnimationFrame(() => state.editor.refresh());
+    }
+  }
+
+  function collapsePane(which) {
+    if (which === 'editor') state.paneLayout.editorCollapsed = true;
+    else state.paneLayout.previewCollapsed = true;
+    savePaneLayout();
+    applyPaneLayout();
+  }
+
+  function restorePane(which) {
+    if (which === 'editor') state.paneLayout.editorCollapsed = false;
+    else state.paneLayout.previewCollapsed = false;
+    savePaneLayout();
+    applyPaneLayout();
+  }
+
+  function toggleMaximizePane(which) {
+    const L = state.paneLayout;
+    const selfCollapsed = which === 'editor' ? L.editorCollapsed : L.previewCollapsed;
+    const otherCollapsed = which === 'editor' ? L.previewCollapsed : L.editorCollapsed;
+    const onlySelf = !selfCollapsed && otherCollapsed;
+    if (onlySelf) {
+      L.editorCollapsed = false;
+      L.previewCollapsed = false;
+    } else {
+      L.editorCollapsed = which !== 'editor';
+      L.previewCollapsed = which !== 'preview';
+    }
+    savePaneLayout();
+    applyPaneLayout();
+  }
+
+  function paneSplitVertical() {
+    return window.matchMedia('(max-width: 960px)').matches;
+  }
+
+  function wirePaneLayout() {
+    const root = document.getElementById('splitPanes');
+    const splitter = document.getElementById('paneSplitter');
+    if (!root || !splitter) return;
+
+    applyPaneLayout();
+
+    document.getElementById('btnCollapseEditor')?.addEventListener('click', () => collapsePane('editor'));
+    document.getElementById('btnCollapsePreview')?.addEventListener('click', () => collapsePane('preview'));
+    document.getElementById('btnMaxEditor')?.addEventListener('click', () => toggleMaximizePane('editor'));
+    document.getElementById('btnMaxPreview')?.addEventListener('click', () => toggleMaximizePane('preview'));
+    document.getElementById('restoreEditorPane')?.addEventListener('click', () => restorePane('editor'));
+    document.getElementById('restorePreviewPane')?.addEventListener('click', () => restorePane('preview'));
+
+    const setSplitFromPointer = (clientX, clientY) => {
+      const rect = root.getBoundingClientRect();
+      const vertical = paneSplitVertical();
+      const ratio = vertical
+        ? (clientY - rect.top) / rect.height
+        : (clientX - rect.left) / rect.width;
+      state.paneLayout.split = Math.min(0.85, Math.max(0.15, ratio));
+      state.paneLayout.editorCollapsed = false;
+      state.paneLayout.previewCollapsed = false;
+      applyPaneLayout();
+    };
+
+    const finishDrag = () => {
+      splitter.classList.remove('dragging');
+      document.body.classList.remove('pane-dragging', 'pane-dragging-vertical');
+      savePaneLayout();
+    };
+
+    const startDrag = (getPoint) => {
+      if (state.paneLayout.editorCollapsed || state.paneLayout.previewCollapsed) return;
+      splitter.classList.add('dragging');
+      document.body.classList.add(paneSplitVertical() ? 'pane-dragging-vertical' : 'pane-dragging');
+
+      const onMouseMove = (ev) => setSplitFromPointer(ev.clientX, ev.clientY);
+      const onMouseUp = () => {
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        finishDrag();
+      };
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+
+      const first = getPoint();
+      if (first) setSplitFromPointer(first.x, first.y);
+    };
+
+    splitter.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      startDrag(() => ({ x: e.clientX, y: e.clientY }));
+    });
+
+    splitter.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) return;
+      e.preventDefault();
+      const touch = e.touches[0];
+      splitter.classList.add('dragging');
+      document.body.classList.add(paneSplitVertical() ? 'pane-dragging-vertical' : 'pane-dragging');
+
+      const onTouchMove = (ev) => {
+        if (ev.touches.length !== 1) return;
+        const t = ev.touches[0];
+        setSplitFromPointer(t.clientX, t.clientY);
+      };
+      const onTouchEnd = () => {
+        document.removeEventListener('touchmove', onTouchMove);
+        document.removeEventListener('touchend', onTouchEnd);
+        document.removeEventListener('touchcancel', onTouchEnd);
+        finishDrag();
+      };
+      document.addEventListener('touchmove', onTouchMove, { passive: false });
+      document.addEventListener('touchend', onTouchEnd);
+      document.addEventListener('touchcancel', onTouchEnd);
+    }, { passive: false });
+
+    splitter.addEventListener('dblclick', () => {
+      state.paneLayout.split = 0.5;
+      state.paneLayout.editorCollapsed = false;
+      state.paneLayout.previewCollapsed = false;
+      savePaneLayout();
+      applyPaneLayout();
+    });
+
+    splitter.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? 0.1 : 0.05;
+      const vertical = paneSplitVertical();
+      const dec = vertical ? e.key === 'ArrowUp' : e.key === 'ArrowLeft';
+      const inc = vertical ? e.key === 'ArrowDown' : e.key === 'ArrowRight';
+      if (dec) {
+        state.paneLayout.split = Math.max(0.15, state.paneLayout.split - step);
+        e.preventDefault();
+      } else if (inc) {
+        state.paneLayout.split = Math.min(0.85, state.paneLayout.split + step);
+        e.preventDefault();
+      } else {
+        return;
+      }
+      state.paneLayout.editorCollapsed = false;
+      state.paneLayout.previewCollapsed = false;
+      savePaneLayout();
+      applyPaneLayout();
+    });
   }
 
   function renderTop() {
@@ -1461,12 +2327,14 @@
       : `<span class="logo" style="width:28px;height:28px;font-size:.9rem">∫</span>`;
     $top().innerHTML = `
       <span id="aiUsageGlobal" class="pill ai-usage-global hidden" title="Total AI tokens used on this account"></span>
-      ${state.aiEnabled && aiCan('chat') ? '<button type="button" id="btnTopChat" class="ghost">Chat</button>' : ''}
+      ${state.aiEnabled && aiCan('chat') ? '<button type="button" id="btnTopChat" class="ghost ai-sparkle-btn">✦ AI</button>' : ''}
+      ${state.aiEnabled && aiCan('settings') ? '<button type="button" id="btnAiSettings" class="ghost">AI settings</button>' : ''}
       ${state.isAdmin ? '<button type="button" id="btnAdminAi" class="ghost">AI access</button>' : ''}
       <div class="user-chip">${avatar}<span>${esc(u.name || u.login || 'User')}</span></div>
       ${state.oauthConfigured ? `<button type="button" id="btnLogout" class="ghost">Sign out</button>` : ''}`;
     renderGlobalAiUsage();
-    document.getElementById('btnTopChat')?.addEventListener('click', () => toggleAiChatPanel(true));
+    document.getElementById('btnTopChat')?.addEventListener('click', () => openAiPanel());
+    document.getElementById('btnAiSettings')?.addEventListener('click', showAiSettings);
     document.getElementById('btnAdminAi')?.addEventListener('click', showAdminAiAccess);
     document.getElementById('btnLogout')?.addEventListener('click', async () => {
       await api('/api/auth_logout.php', { method: 'POST', json: {} });
@@ -1486,78 +2354,96 @@
   }
 
   function renderDashboard() {
-    const projects = state.projects.map((p) => {
-      const usage = p.aiUsage?.totalTokens ? `<span class="pill ai-usage-pill" title="AI tokens used on this project">${formatTokens(p.aiUsage.totalTokens)} tok</span>` : '';
+    const projectRows = state.projects.map((p) => {
+      const usage = p.aiUsage?.totalTokens
+        ? `<span class="project-badge project-badge-ai" title="AI tokens used">${formatTokens(p.aiUsage.totalTokens)} tok</span>`
+        : '';
+      const search = [p.name, p.mainFile, p.engine, p.role, p.aiModel].filter(Boolean).join(' ').toLowerCase();
+      const updated = formatRelativeTime(p.updatedAt);
       return `
-      <article class="card clickable" data-open="${esc(p.id)}">
-        <h3>${esc(p.name)}</h3>
-        <p>${esc(p.mainFile)} · ${esc(p.engine)}</p>
-        <div class="meta">
-          <span class="pill">${esc(p.role || 'owner')}</span>
-          ${p.hasPdf ? '<span class="pill">PDF ready</span>' : ''}
+      <div class="project-row" role="listitem" data-open="${esc(p.id)}" data-search="${esc(search)}"
+        title="Open ${esc(p.name)}">
+        <span class="project-row-icon" aria-hidden="true">📄</span>
+        <span class="project-row-body">
+          <span class="project-row-name">${esc(p.name)}</span>
+          <span class="project-row-meta">${esc(p.mainFile)} · ${esc(p.engine)}${updated ? ` · ${esc(updated)}` : ''}</span>
+        </span>
+        <span class="project-row-badges">
+          <span class="project-badge">${esc(p.role || 'owner')}</span>
+          ${p.hasPdf ? '<span class="project-badge project-badge-ok">PDF</span>' : ''}
           ${usage}
-        </div>
-        <div class="card-actions">
-          <button type="button" data-open="${esc(p.id)}" class="primary">Open</button>
-          <button type="button" data-del="${esc(p.id)}" class="danger">Delete</button>
-        </div>
-      </article>`;
+        </span>
+        <button type="button" class="ghost project-row-del" data-del="${esc(p.id)}" title="Delete project" aria-label="Delete ${esc(p.name)}">×</button>
+      </div>`;
     }).join('');
 
-    const aiHero = aiCan('createProject') ? `
-        <article class="card ai-new-project-card">
-          <div class="ai-new-project-glow" aria-hidden="true"></div>
-          <div class="ai-new-project-inner">
-            <div class="ai-new-project-icon" aria-hidden="true">✦</div>
+    const aiBanner = aiCan('createProject') ? `
+        <div class="dash-ai-banner">
+          <div class="dash-ai-banner-copy">
+            <span class="dash-ai-banner-icon" aria-hidden="true">✦</span>
             <div>
-              <h3>New project with AI</h3>
-              <p>Describe a document — homework, article, resume, slides — and SiamTeX will generate a multi-file LaTeX project.</p>
-              ${state.aiUsage?.totalTokens ? `<p class="ai-usage-note">Account total: <strong>${formatTokens(state.aiUsage.totalTokens)}</strong> tokens across ${state.aiUsage.callCount} AI call(s)</p>` : ''}
+              <strong>New project with AI</strong>
+              <span>Describe a document and get a multi-file LaTeX project.</span>
             </div>
-            <button type="button" id="btnAiNewProject" class="primary ai-sparkle-btn">✦ Create with AI</button>
           </div>
-        </article>` : '';
+          <button type="button" id="btnAiNewProject" class="primary ai-sparkle-btn">Create with AI</button>
+        </div>` : '';
 
     const templates = state.templates.map((t) => `
-      <article class="card">
-        <h3>${esc(t.name)}</h3>
-        <p>${esc(t.description)}</p>
-        <div class="meta">
-          <span class="pill">${esc(t.category)}</span>
-          <span class="pill">${(t.files || []).length} file${(t.files || []).length === 1 ? '' : 's'}</span>
+      <article class="template-tile">
+        <div class="template-tile-head">
+          <span class="template-tile-icon" aria-hidden="true">${templateIcon(t.category)}</span>
+          <span class="template-tile-cat">${esc(t.category || 'general')}</span>
         </div>
-        <p class="tpl-files">${esc((t.files || []).join(', '))}</p>
-        <div class="card-actions">
-          <button type="button" class="primary" data-tpl="${esc(t.id)}">Use template package</button>
-        </div>
+        <h3 class="template-tile-name">${esc(t.name)}</h3>
+        <p class="template-tile-desc">${esc(t.description)}</p>
+        <p class="template-tile-files">${esc((t.files || []).join(', '))}</p>
+        <button type="button" class="template-tile-btn" data-tpl="${esc(t.id)}">Create from template</button>
       </article>`).join('');
+
+    const projectCount = state.projects.length;
 
     $main().innerHTML = `
       <section class="dash">
-        <div class="dash-head">
+        <header class="dash-head">
           <div>
-            <h1>Your projects</h1>
-            <p>Start from a template — the editor opens with sample text you can edit using the Insert menus.</p>
+            <h1>Projects</h1>
+            <p class="dash-lead">Your saved work — open a row to continue editing.</p>
           </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <div class="dash-head-actions">
             <button type="button" id="btnNew" class="primary">New project</button>
-            <label class="btn" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">
+            <label class="btn dash-import-btn">
               Import zip
               <input id="importFile" type="file" accept=".zip,application/zip" hidden />
             </label>
           </div>
-        </div>
-        <div class="grid dash-feature-grid">${aiHero}${projects || ''}</div>
-        ${!projects && !aiHero ? '<p class="pill">No projects yet — create one from a template or with AI.</p>' : ''}
-        <div class="templates">
-          <h2>Templates</h2>
-          <div class="grid">${templates}</div>
-        </div>
+        </header>
+
+        ${aiBanner}
+
+        <section class="dash-projects" aria-label="Your projects">
+          <div class="dash-projects-toolbar">
+            <input type="search" id="dashProjectSearch" class="dash-search" placeholder="Search projects…" autocomplete="off" />
+            <span class="dash-project-count">${projectCount} project${projectCount === 1 ? '' : 's'}</span>
+          </div>
+          ${projectCount ? `
+          <div class="project-list" role="list">${projectRows}</div>
+          <p id="dashProjectNoMatch" class="dash-empty hidden">No projects match your search.</p>
+          ` : `<p class="dash-empty">No projects yet — pick a template below or create a new project.</p>`}
+        </section>
+
+        <section class="dash-templates" aria-label="Templates">
+          <header class="dash-templates-head">
+            <h2>Templates</h2>
+            <p>Starter packages — choose one to create a <em>new</em> project (not listed above until you save it).</p>
+          </header>
+          <div class="template-grid">${templates}</div>
+        </section>
       </section>`;
 
-    $main().querySelectorAll('[data-open]').forEach((el) => {
+    document.querySelectorAll('.project-row[data-open]').forEach((el) => {
       el.addEventListener('click', (e) => {
-        e.stopPropagation();
+        if (e.target.closest('[data-del]')) return;
         openProject(el.getAttribute('data-open'));
       });
     });
@@ -1575,6 +2461,7 @@
     });
     document.getElementById('btnNew').onclick = () => showNewModal('blank');
     document.getElementById('btnAiNewProject')?.addEventListener('click', showAiNewProject);
+    document.getElementById('dashProjectSearch')?.addEventListener('input', filterDashboardProjects);
     document.getElementById('importFile').onchange = async (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -1642,7 +2529,7 @@
       toast('Create project with AI is not enabled for your account', 'error');
       return;
     }
-    const cfg = state.aiConfig || {};
+    const cfg = effectiveAiConfig();
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop';
     backdrop.innerHTML = `
@@ -1770,8 +2657,15 @@
     const opts = EDITOR_THEMES.map((t) => (
       `<option value="${esc(t.id)}">${esc(t.label)}</option>`
     )).join('');
+    const canEdit = canEditProject(state.project);
+    const modelSelect = state.aiEnabled ? `
+        <label class="editor-pref editor-pref-model" title="AI model for this project">
+          <span class="editor-pref-label">Model</span>
+          <select id="projAiModel" class="proj-ai-model"${canEdit ? '' : ' disabled'}>${renderAiModelOptionList(state.project?.aiModel || state.aiConfig?.model || '')}</select>
+        </label>` : '';
     return `
       <div class="editor-prefs">
+        ${modelSelect}
         <label class="editor-pref" title="Editor color theme">
           <span class="editor-pref-label">Theme</span>
           <select id="editorTheme">${opts}</select>
@@ -1866,7 +2760,16 @@
       const q = shareToken
         ? `?id=${encodeURIComponent(id)}&token=${encodeURIComponent(shareToken)}`
         : `?id=${encodeURIComponent(id)}`;
-      const data = await api('/api/project.php' + q);
+      const [data, me] = await Promise.all([
+        api('/api/project.php' + q),
+        shareToken ? Promise.resolve(null) : api('/api/auth_me.php').catch(() => null),
+      ]);
+      if (me) {
+        state.aiPermissions = me.aiPermissions ?? state.aiPermissions;
+        state.aiEnabled = !!me.aiEnabled;
+        state.isAdmin = !!me.isAdmin;
+        state.aiConfig = me.aiConfig ?? state.aiConfig;
+      }
       state.project = data.project;
       state.files = data.files || [];
       state.buildsByEntry = data.builds || {};
@@ -1878,6 +2781,9 @@
       history.replaceState({}, '', BASE + '/?project=' + encodeURIComponent(id)
         + (shareToken ? '&token=' + encodeURIComponent(shareToken) : ''));
       renderWorkspace();
+      if (hasAiChat() && canEditProject(data.project)) {
+        setChatMode('edit');
+      }
       await loadFile(state.activePath);
       updatePreviewLabel();
       if (hasPdfForEntry(previewEntry())) refreshPdf();
@@ -1988,6 +2894,7 @@
   function renderWorkspace() {
     const p = state.project;
     const canEdit = canEditProject(p);
+    destroyEditor();
     $main().innerHTML = `
       <section class="workspace">
         <div class="ws-toolbar">
@@ -2000,11 +2907,10 @@
           </select>
           <span class="status-dot" id="statusDot" title="Build status"></span>
           <button type="button" id="btnCompile" class="primary" ${canEdit ? '' : 'disabled'}>Compile</button>
+          ${hasAiChat() ? '<button type="button" id="btnAiPanel" class="primary ai-sparkle-btn" title="AI — chat, quick edits, apply to editor">✦ AI</button>' : ''}
           <button type="button" id="btnExport">Export</button>
           ${p.role === 'owner' ? '<button type="button" id="btnShare">Share</button>' : ''}
           <button type="button" id="btnTools">Tools</button>
-          ${canEdit && aiCan('assist') ? '<button type="button" id="btnAi">AI</button>' : ''}
-          ${aiCan('chat') ? '<button type="button" id="btnAiChat">Chat</button>' : ''}
           <button type="button" id="btnHistory" title="Version history">History</button>
           <span id="aiUsageProject" class="pill ai-usage-project hidden" title="AI token usage for this project"></span>
         </div>
@@ -2012,25 +2918,46 @@
         <aside class="files">
           <h4>Files</h4>
           <div id="fileList"></div>
+          <div id="pdfOutputList"></div>
           ${canEdit ? `<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
             <button type="button" id="btnAddFile">+ File</button>
           </div>` : ''}
         </aside>
-        <section class="editor-pane">
-          <div class="pane-label editor-bar">
-            <span id="editorLabel" class="editor-bar-title">Editor — click here and type, or use the Insert menus above</span>
-            ${editorPrefsHtml()}
-          </div>
-          <div id="editorHost" data-editor-theme="${esc(state.editorTheme)}"></div>
-        </section>
-        <section class="preview-pane">
-          <div class="pane-label">PDF preview</div>
-          <iframe id="pdfFrame" title="PDF preview"></iframe>
-        </section>
-        <section class="problems">
+        <div class="split-panes" id="splitPanes">
+          <button type="button" class="pane-restore pane-restore-editor" id="restoreEditorPane" title="Show editor">Editor ▸</button>
+          <section class="editor-pane" id="editorPane">
+            <div class="pane-label editor-bar">
+              <span id="editorLabel" class="editor-bar-title">Editor — click here and type, or use the Insert menus above</span>
+              <div class="pane-actions">
+                ${editorPrefsHtml()}
+                <button type="button" class="ghost pane-btn" id="btnMaxEditor" title="Maximize editor (restore split when already maximized)">⛶</button>
+                <button type="button" class="ghost pane-btn" id="btnCollapseEditor" title="Collapse editor">◀</button>
+              </div>
+            </div>
+            <div id="editorHost" data-editor-theme="${esc(state.editorTheme)}"></div>
+          </section>
+          <div class="pane-splitter" id="paneSplitter" role="separator"
+            aria-orientation="vertical" aria-valuemin="15" aria-valuemax="85" aria-valuenow="50"
+            tabindex="0" title="Drag to resize. Double-click for 50/50. Arrow keys to nudge."></div>
+          <section class="preview-pane" id="previewPane">
+            <div class="pane-label preview-bar">
+              <span id="previewLabel" class="preview-bar-title">PDF preview</span>
+              <div class="pane-actions">
+                <button type="button" class="ghost pane-btn" id="btnCollapsePreview" title="Collapse preview">▶</button>
+                <button type="button" class="ghost pane-btn" id="btnMaxPreview" title="Maximize preview (restore split when already maximized)">⛶</button>
+              </div>
+            </div>
+            <iframe id="pdfFrame" title="PDF preview"></iframe>
+          </section>
+          <button type="button" class="pane-restore pane-restore-preview" id="restorePreviewPane" title="Show PDF preview">◂ PDF</button>
+        </div>
+        <section class="problems" id="problemsPanel">
           <div class="problems-tabs">
             <button type="button" data-tab="problems" class="active">Problems</button>
             <button type="button" data-tab="log">Build log</button>
+            <span class="problems-tabs-spacer"></span>
+            <button type="button" id="btnProblemsExpand" class="ghost problems-tab-action" title="Toggle panel height">Expand</button>
+            <button type="button" id="btnProblemsFullLog" class="ghost problems-tab-action" title="Open full build log">Full log</button>
           </div>
           <div class="problems-body" id="problemsBody"></div>
         </section>
@@ -2048,8 +2975,7 @@
     };
     document.getElementById('btnShare')?.addEventListener('click', shareProject);
     document.getElementById('btnTools').onclick = showTools;
-    document.getElementById('btnAi')?.addEventListener('click', showAiAssist);
-    document.getElementById('btnAiChat')?.addEventListener('click', () => toggleAiChatPanel(true));
+    document.getElementById('btnAiPanel')?.addEventListener('click', () => openAiPanel());
     document.getElementById('btnHistory')?.addEventListener('click', showHistory);
     document.getElementById('btnAddFile')?.addEventListener('click', () => {
       addFile().catch((e) => toast(e.message || 'Could not open add-file dialog', 'error'));
@@ -2073,7 +2999,13 @@
         renderProblems();
       };
     });
+    document.getElementById('btnProblemsExpand')?.addEventListener('click', toggleProblemsExpanded);
+    document.getElementById('btnProblemsFullLog')?.addEventListener('click', showFullBuildLogModal);
+    const problemsPanel = document.getElementById('problemsPanel');
+    if (problemsPanel) problemsPanel.classList.toggle('problems-expanded', state.problemsExpanded);
 
+    wirePaneLayout();
+    refreshProjAiModelSelect().then(() => wireProjAiModel());
     bindToolbar();
     wireEditorPrefs();
     renderProjectAiUsage();
@@ -2086,14 +3018,34 @@
     renderProblems();
     updatePreviewLabel();
     updateStatusDot();
-    createEditor('', !canEdit);
-    wireEditorPrefs();
   }
 
   function isBinaryFile(f) {
     if (!f) return false;
     if (f.binary) return true;
     return /\.(png|jpe?g|gif|webp|bmp|tiff?|ico|svgz|pdf|eps|ps|ai|otf|ttf|ttc|woff2?|pfb|pfm|afm|tfm|vf|pk|gf|mf|map|enc)$/i.test(f.path || '');
+  }
+
+  function pdfDownloadUrl(entry) {
+    const token = state.shareToken ? '&token=' + encodeURIComponent(state.shareToken) : '';
+    return BASE + '/api/pdf.php?id=' + encodeURIComponent(state.project.id)
+      + '&entry=' + encodeURIComponent(entry) + '&download=1' + token;
+  }
+
+  function renderPdfOutputsHtml() {
+    const entries = (state.project?.pdfEntries || []).slice().sort();
+    if (!entries.length) return '';
+    return `<div class="pdf-outputs">
+      <h4 class="pdf-outputs-title">PDF outputs</h4>
+      ${entries.map((tex) => {
+        const pdfName = tex.replace(/\.tex$/i, '.pdf');
+        const url = pdfDownloadUrl(tex);
+        return `<div class="pdf-output-item">
+          <span class="pdf-output-name" title="Compiled from ${esc(tex)}">📕 ${esc(pdfName)}</span>
+          <a class="btn ghost pdf-dl-btn" href="${esc(url)}" download="${esc(pdfName)}">Download</a>
+        </div>`;
+      }).join('')}
+    </div>`;
   }
 
   function renderFileList() {
@@ -2130,6 +3082,8 @@
         renderFileList();
       });
     });
+    const pdfOut = document.getElementById('pdfOutputList');
+    if (pdfOut) pdfOut.innerHTML = renderPdfOutputsHtml();
   }
 
   function showBinaryPane(path, size) {
@@ -2232,17 +3186,22 @@
         : ' — view only');
     }
     const text = state.contents[path] || '';
-    if (state.editor && state.editor.setValue && document.querySelector('#editorHost .CodeMirror, #editorFallback')) {
-      const ro = !canEditProject(state.project);
-      state.editor.setOption?.('readOnly', ro);
+    const editable = canEditProject(state.project);
+    const host = document.getElementById('editorHost');
+    const hasLiveEditor = host && state.editor?.setValue
+      && host.contains(state.editor.getWrapperElement?.() || null);
+    if (hasLiveEditor) {
+      state.editor.setOption?.('readOnly', !editable);
       state.editor.setValue(text);
       state.editor.refresh?.();
+      applyEditorVim();
       state.editor.focus?.();
     } else {
-      createEditor(text, !canEditProject(state.project));
+      createEditor(text, !editable);
       wireEditorPrefs();
     }
     renderFileList();
+    if (state.chatOpen) updateAiChatChrome();
     if (isCompileEntry(path)) {
       const entry = path;
       state.build = state.buildsByEntry[entry] || null;
@@ -2372,11 +3331,51 @@
     return tail.join('\n');
   }
 
+  function logViewClass() {
+    return 'log-view' + (state.problemsExpanded ? ' log-expanded' : '');
+  }
+
+  function toggleProblemsExpanded() {
+    state.problemsExpanded = !state.problemsExpanded;
+    const panel = document.getElementById('problemsPanel');
+    panel?.classList.toggle('problems-expanded', state.problemsExpanded);
+    const btn = document.getElementById('btnProblemsExpand');
+    if (btn) btn.textContent = state.problemsExpanded ? 'Collapse' : 'Expand';
+    renderProblems();
+  }
+
+  function showFullBuildLogModal() {
+    const log = state.build?.log || 'No build log yet. Click Compile to build your PDF.';
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal modal-wide modal-log">
+        <h2>Full build log</h2>
+        <pre class="build-log-full">${esc(log)}</pre>
+        <div class="modal-actions">
+          <button type="button" id="buildLogCopy" class="ghost">Copy log</button>
+          <button type="button" id="buildLogClose">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(backdrop);
+    backdrop.querySelector('#buildLogClose').onclick = () => backdrop.remove();
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.remove(); });
+    backdrop.querySelector('#buildLogCopy').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(log);
+        toast('Log copied', 'ok');
+      } catch {
+        toast('Could not copy', 'error');
+      }
+    };
+  }
+
   function renderProblems() {
     const body = document.getElementById('problemsBody');
     if (!body) return;
+    const logCls = logViewClass();
     if (state.problemsTab === 'log') {
-      body.innerHTML = `<div class="log-view">${esc(state.build?.log || 'No build log yet. Click Compile to build your PDF.')}</div>`;
+      body.innerHTML = `<div class="${logCls}">${esc(state.build?.log || 'No build log yet. Click Compile to build your PDF.')}</div>`;
       return;
     }
     const diags = state.build?.diagnostics || [];
@@ -2386,7 +3385,7 @@
       if (state.build?.status === 'error' || state.build?.status === 'ok_with_warnings') {
         const fallback = logProblemFallback(state.build?.log || '');
         if (fallback) {
-          body.innerHTML = `<div class="pill" style="margin-bottom:8px">Could not parse structured problems — showing log excerpt:</div><div class="log-view">${esc(fallback)}</div>`;
+          body.innerHTML = `<div class="pill" style="margin-bottom:8px">Could not parse structured problems — showing log excerpt:</div><div class="${logCls}">${esc(fallback)}</div>`;
           return;
         }
       }
@@ -2703,6 +3702,139 @@
     };
   }
 
+  async function showAiSettings() {
+    if (!aiCan('settings')) {
+      toast('AI settings are not enabled for your account', 'error');
+      return;
+    }
+    let cfg = state.aiConfig || {};
+    let serverDefaults = {};
+    try {
+      const data = await api('/api/ai_settings.php');
+      cfg = data.config || cfg;
+      serverDefaults = data.serverDefaults || {};
+    } catch (e) {
+      toast(e.message, 'error');
+      return;
+    }
+    await loadAiModels();
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal modal-wide">
+        <h2>AI settings</h2>
+        <p class="ai-disclaimer">Your <strong>default model</strong> applies to new projects and any project without its own model. Override per project in the toolbar model dropdown.</p>
+        <label>Provider</label>
+        <select id="aiSetProvider">
+          <option value="ollama">Ollama</option>
+          <option value="openai">OpenAI</option>
+          <option value="openai_compatible">OpenAI-compatible (custom)</option>
+        </select>
+        <label>Base URL</label>
+        <input id="aiSetBaseUrl" type="url" placeholder="https://api.openai.com/v1 or http://host:11434/v1" />
+        <label>Default model</label>
+        <div class="ai-model-pick">
+          <input id="aiSetModel" type="text" list="aiSetModelList" placeholder="e.g. gpt-oss:20b" />
+          <datalist id="aiSetModelList"></datalist>
+          <button type="button" id="aiSetRefreshModels" class="ghost">Refresh models</button>
+        </div>
+        <p class="pill ai-settings-server">Server default: ${esc(serverDefaults.model || '(not set)')} @ ${esc(serverDefaults.baseUrl || '')}</p>
+        <label>API key (optional — leave blank to keep current)</label>
+        <input id="aiSetApiKey" type="password" autocomplete="off" placeholder="${cfg.hasApiKey ? '••••••••' : 'Not set'}" />
+        <label class="editor-pref"><input type="checkbox" id="aiSetEnabled" /> Use my settings (override server defaults)</label>
+        <p id="aiSetStatus" class="pill hidden"></p>
+        <div class="modal-actions">
+          <button type="button" id="aiSetTest" class="ghost">Test connection</button>
+          <button type="button" id="aiSetSave" class="primary">Save default</button>
+          <button type="button" id="aiSetClose">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(backdrop);
+
+    const providerEl = backdrop.querySelector('#aiSetProvider');
+    const baseEl = backdrop.querySelector('#aiSetBaseUrl');
+    const modelEl = backdrop.querySelector('#aiSetModel');
+    const modelListEl = backdrop.querySelector('#aiSetModelList');
+    const statusEl = backdrop.querySelector('#aiSetStatus');
+
+    providerEl.value = cfg.provider || 'ollama';
+    baseEl.value = cfg.baseUrl || '';
+    modelEl.value = cfg.model || '';
+    backdrop.querySelector('#aiSetEnabled').checked = !!cfg.enabled;
+
+    const fillModelList = () => {
+      modelListEl.innerHTML = (state.aiModels || []).map((m) => `<option value="${esc(m)}"></option>`).join('');
+    };
+    fillModelList();
+
+    backdrop.querySelector('#aiSetRefreshModels').onclick = async () => {
+      const btn = backdrop.querySelector('#aiSetRefreshModels');
+      btn.disabled = true;
+      try {
+        const data = await api('/api/ai_models.php');
+        state.aiModels = data.models || [];
+        fillModelList();
+        toast(`Found ${state.aiModels.length} model(s)`, 'ok');
+      } catch (e) {
+        toast(e.message, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    };
+
+    backdrop.querySelector('#aiSetTest').onclick = async () => {
+      statusEl.classList.remove('hidden');
+      statusEl.textContent = 'Testing…';
+      try {
+        await api('/api/ai_settings.php', {
+          method: 'PUT',
+          json: {
+            provider: providerEl.value,
+            baseUrl: baseEl.value.trim(),
+            model: modelEl.value.trim(),
+            enabled: backdrop.querySelector('#aiSetEnabled').checked,
+          },
+        });
+        const r = await api('/api/ai_test.php', { method: 'POST', json: {} });
+        statusEl.textContent = r.ok ? `OK — ${r.model}` : `Reply: ${r.reply}`;
+        toast(r.ok ? 'Connection OK' : 'Unexpected reply', r.ok ? 'ok' : 'error');
+      } catch (e) {
+        statusEl.textContent = e.message;
+        toast(e.message, 'error');
+      }
+    };
+
+    backdrop.querySelector('#aiSetSave').onclick = async () => {
+      const model = modelEl.value.trim();
+      if (!model) {
+        toast('Model is required', 'error');
+        return;
+      }
+      const payload = {
+        provider: providerEl.value,
+        baseUrl: baseEl.value.trim(),
+        model,
+        enabled: backdrop.querySelector('#aiSetEnabled').checked,
+      };
+      const key = backdrop.querySelector('#aiSetApiKey').value.trim();
+      if (key) payload.apiKey = key;
+      try {
+        const data = await api('/api/ai_settings.php', { method: 'PUT', json: payload });
+        state.aiConfig = data.config;
+        await loadAiModels();
+        renderProjAiModelSelect();
+        updateAiChatChrome();
+        toast('Default AI settings saved', 'ok');
+        backdrop.remove();
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    };
+
+    backdrop.querySelector('#aiSetClose').onclick = () => backdrop.remove();
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.remove(); });
+  }
+
   function showTools() {
     const text = state.editor ? state.editor.getValue() : '';
     const words = text.trim() ? text.trim().split(/\s+/).length : 0;
@@ -2756,165 +3888,58 @@
     run();
   }
 
+  function openAiPanel(options = {}) {
+    if (!hasAiChat()) {
+      toast('AI is not enabled for your account', 'error');
+      return;
+    }
+    if (state.project && hasAiEditInChat() && (options.editMode || state.chatMode !== 'ask')) {
+      setChatMode('edit');
+    }
+    toggleAiChatPanel(true);
+    renderAiMagicBar();
+    if (!options.focusChat) state.editor?.focus?.();
+    else document.getElementById('aiChatInput')?.focus();
+  }
+
   function showAiAssist() {
-    if (!aiCan('assist')) {
-      toast('AI assist is not enabled for your account', 'error');
+    openAiPanel({ editMode: true });
+  }
+
+  async function applyChatMessageEdit(msg) {
+    const pending = extractChatApplyPayload(msg);
+    if (!pending) {
+      toast('Nothing to apply from this message', 'error');
       return;
     }
-    if (!state.project || !canEditProject(state.project)) {
-      toast('Open an editable project first', 'error');
-      return;
+    if (pending.mode === 'file' && pending.result?.path && pending.result.path !== state.activePath) {
+      await loadFile(pending.result.path);
     }
-    const path = state.activePath;
-    if (!path || isBinaryFile({ path })) {
-      toast('Open a .tex or text file to edit with AI', 'error');
-      return;
-    }
-    const cfg = state.aiConfig || {};
-    const backdrop = document.createElement('div');
-    backdrop.className = 'modal-backdrop';
-    backdrop.innerHTML = `
-      <div class="modal modal-wide">
-        <h2>AI assist</h2>
-        <p class="ai-disclaimer"><strong>Alpha / experimental.</strong> Sends the current file (or whole project) to your configured provider. Accuracy and usefulness depend on your model — review every change before accepting.</p>
-        <p class="pill">${esc(cfg.model || 'model')} @ ${esc(cfg.baseUrl || 'provider')}</p>
-        <label>Scope</label>
-        <select id="aiScope">
-          <option value="file">Current file (${esc(path)})</option>
-          <option value="project">Whole project (.tex / .bib)</option>
-        </select>
-        <label>Instruction</label>
-        <textarea id="aiInstruction" rows="4" placeholder="e.g. Improve wording, fix LaTeX errors, expand the summary section…"></textarea>
-        <label>Extra reference text (optional)</label>
-        <textarea id="aiContext" rows="3" placeholder="Paste notes, job description, or imported text…"></textarea>
-        <div class="ai-presets">
-          <button type="button" class="tb" data-preset="Improve wording and clarity. Keep structure.">Polish</button>
-          <button type="button" class="tb" data-preset="Fix LaTeX syntax issues. Return valid LaTeX only.">Fix LaTeX</button>
-          <button type="button" class="tb" data-preset="Expand with more detail while staying concise.">Expand</button>
-        </div>
-        <div id="aiWaitMount" class="ai-wait-mount hidden"></div>
-        <div id="aiPreview" class="ai-preview hidden"></div>
-        <div class="modal-actions">
-          ${aiCan('settings') ? '<button type="button" id="aiTest" class="ghost">Test connection</button>' : ''}
-          <button type="button" id="aiRun" class="primary">Run</button>
-          <button type="button" id="aiAccept" class="primary hidden">Accept into editor</button>
-          <button type="button" id="aiClose">Close</button>
-        </div>
-      </div>`;
-    document.body.appendChild(backdrop);
-    let pending = null;
-    const waitMount = backdrop.querySelector('#aiWaitMount');
-    const runBtn = backdrop.querySelector('#aiRun');
-    const testBtn = backdrop.querySelector('#aiTest');
-    const closeBtn = backdrop.querySelector('#aiClose');
-    const acceptBtn = backdrop.querySelector('#aiAccept');
-
-    function modelLabel() {
-      return state.aiConfig?.model || 'the model';
-    }
-
-    backdrop.querySelectorAll('[data-preset]').forEach((btn) => {
-      btn.onclick = () => {
-        backdrop.querySelector('#aiInstruction').value = btn.getAttribute('data-preset');
-      };
-    });
-
-    backdrop.querySelector('#aiTest')?.addEventListener('click', async () => {
-      const wait = createAiWait(waitMount, {
-        title: 'Testing AI connection',
-        subtitle: 'Quick ping to your configured provider.',
-        phases: [
-          'Contacting the AI provider…',
-          'Waiting for a short test reply…',
-          'Still waiting on the model…',
-          'Connection is slow — check Tailscale / Ollama…',
-          'Nearly at the time limit…',
-        ],
-      });
-      try {
-        const r = await runAiRequest('/api/ai_test.php', {}, wait, [testBtn, runBtn, closeBtn]);
-        toast(r.ok ? 'AI connection OK' : 'Unexpected reply: ' + r.reply, r.ok ? 'ok' : 'error');
-      } catch (e) {
-        toast(e.message, e.message.includes('cancelled') ? '' : 'error');
-      }
-    });
-
-    backdrop.querySelector('#aiRun').onclick = async () => {
-      const instruction = backdrop.querySelector('#aiInstruction').value.trim();
-      if (!instruction) {
-        toast('Enter an instruction', 'error');
-        return;
-      }
-      const scope = backdrop.querySelector('#aiScope').value;
-      const payload = {
-        projectId: state.project.id,
-        instruction,
-        mode: scope === 'project' ? 'project' : 'file',
-        path: scope === 'file' ? path : undefined,
-        context: backdrop.querySelector('#aiContext').value.trim(),
-      };
-      const wait = createAiWait(waitMount, {
-        title: scope === 'project' ? 'AI editing project' : `AI editing ${path}`,
-        streaming: true,
-        subtitle: scope === 'project'
-          ? 'Multi-file JSON streams below; token counts update in parallel.'
-          : 'Live LaTeX output appears below; token usage updates as the model responds.',
-        phases: scope === 'project' ? [
-          `Collecting project files for ${modelLabel()}…`,
-          'Uploading context to the model…',
-          'Model is planning multi-file edits…',
-          'Still writing — project-wide edits can take a few minutes…',
-          'Approaching timeout — try single-file mode for faster results…',
-        ] : [
-          `Reading ${path}…`,
-          `Sending to ${modelLabel()}…`,
-          'Model is rewriting your LaTeX…',
-          'Still generating — local models often need 30–90 seconds…',
-          'Approaching timeout — try a shorter instruction…',
-        ],
-      });
-      runBtn.textContent = 'Running…';
-      try {
-        const data = await runAiStreamRequest('/api/ai_stream.php', payload, wait, [runBtn, testBtn, closeBtn, acceptBtn]);
-        pending = { mode: data.mode, result: data.result };
-        applyAiUsageFromResponse(data);
-        const prev = backdrop.querySelector('#aiPreview');
-        prev.classList.remove('hidden');
-        if (data.mode === 'file') {
-          prev.innerHTML = `<h3>${esc(data.result.summary)}</h3><pre>${esc(data.result.content.slice(0, 8000))}</pre>`;
-          acceptBtn.classList.remove('hidden');
+    if (pending.mode === 'snippet') {
+      const path = pending.path || state.activePath;
+      const content = pending.content;
+      if (state.editor && state.activePath === path && !state.editor.getOption('readOnly')) {
+        const doc = state.editor.getDoc();
+        if (pending.target === 'selection' && doc.somethingSelected?.()) {
+          doc.replaceSelection(content);
         } else {
-          const names = Object.keys(data.result.files || {}).join(', ');
-          const notes = (data.result.notes || []).filter(Boolean);
-          prev.innerHTML = `<h3>${esc(data.result.summary)}</h3><p>Files: ${esc(names)}</p>`;
-          if (notes.length) {
-            prev.innerHTML += `<div class="ai-notes"><strong>Notes</strong>${notes.map((n) => `<p>${esc(n)}</p>`).join('')}</div>`;
-          }
-          for (const [fp, body] of Object.entries(data.result.files || {})) {
-            prev.innerHTML += `<h4>${esc(fp)}</h4><pre>${esc(String(body).slice(0, 4000))}</pre>`;
-          }
-          acceptBtn.classList.remove('hidden');
+          state.editor.setValue(content);
         }
-        toast(`AI suggestion ready — ${formatTokenUsage(data.usage)} — review and Accept`, 'ok');
-      } catch (e) {
-        toast(e.message, e.message.includes('cancelled') ? '' : 'error');
-      } finally {
-        runBtn.textContent = 'Run';
+        markDirtyFromEditor();
+        await saveActive('ai');
+      } else if (path) {
+        await api('/api/files.php?id=' + encodeURIComponent(state.project.id), {
+          method: 'PUT',
+          json: { path, content, source: 'ai' },
+        });
+        state.contents[path] = content;
+        if (state.activePath === path && state.editor) state.editor.setValue(content);
       }
-    };
-
-    backdrop.querySelector('#aiAccept').onclick = async () => {
-      if (!pending) return;
-      try {
-        await applyAiFileChanges(pending);
-        toast('AI changes applied', 'ok');
-        backdrop.remove();
-      } catch (e) {
-        toast(e.message, 'error');
-      }
-    };
-
-    backdrop.querySelector('#aiClose').onclick = () => backdrop.remove();
+      toast('Applied to editor', 'ok');
+      return;
+    }
+    await applyAiFileChanges(pending);
+    state.editor?.focus?.();
   }
 
   async function applyAiFileChanges(pending) {
@@ -2963,7 +3988,7 @@
     backdrop.innerHTML = `
       <div class="modal modal-wide">
         <h2>AI fix compile problems</h2>
-        <p class="ai-disclaimer"><strong>Alpha / experimental.</strong> Sends compile errors and affected files to your AI provider. Fixes are not guaranteed — quality depends on your model. Review every change before accepting.</p>
+        <p class="ai-disclaimer"><strong>Alpha / experimental.</strong> Sends compile errors, affected files, and the <strong>full build log</strong> to your AI provider. Fixes are not guaranteed — quality depends on your model. Review every change before accepting.</p>
         <div class="ai-error-list">${errors.map((d) => `
           <div class="pill"><strong>${esc(d.severity)}</strong> ${esc(d.message || '(no message)')}
           <span class="loc">${esc(diagLocation(d))}</span></div>`).join('')}</div>
@@ -2990,7 +4015,7 @@
         subtitle: 'Fix JSON streams below; token usage updates in parallel.',
         phases: [
           'Gathering errors and affected source files from the last build…',
-          `Sending context to ${state.aiConfig?.model || 'the model'}…`,
+          `Sending context to ${effectiveAiModel() || 'the model'}…`,
           'Model is diagnosing LaTeX errors and planning fixes…',
           'Generating corrected file content — this often takes 1–3 minutes…',
           'Approaching timeout — cancel and fix one file manually if needed…',
@@ -3000,7 +4025,7 @@
       try {
         const data = await runAiStreamRequest(
           '/api/ai_stream.php',
-          { projectId: state.project.id, mode: 'fix_problems' },
+          { projectId: state.project.id, mode: 'fix_problems', entry: compileEntryForActive() },
           wait,
           [runBtn, acceptBtn, closeBtn],
         );
@@ -3285,7 +4310,8 @@
     backdrop.innerHTML = `
       <div class="modal modal-wide admin-ai-modal">
         <h2>AI access control</h2>
-        <p class="ai-disclaimer">Grant AI features per user. Administrators always have full access. New users start with everything off.</p>
+        <p class="ai-disclaimer">AI can be off for everyone until you enable features per user. Set optional token quotas to cap usage (blank = unlimited). Administrators listed in <code>SIAMTEX_ADMIN_GITHUB_LOGINS</code> always have full feature access but still appear in usage totals.</p>
+        <div id="adminAiSiteUsage" class="admin-ai-site-usage pill hidden"></div>
         <p id="adminAiStatus" class="pill">Loading users…</p>
         <div id="adminAiTable" class="admin-ai-table-wrap"></div>
         <div class="modal-actions">
@@ -3297,6 +4323,7 @@
 
     const tableEl = backdrop.querySelector('#adminAiTable');
     const statusEl = backdrop.querySelector('#adminAiStatus');
+    const siteEl = backdrop.querySelector('#adminAiSiteUsage');
 
     const featureCols = [
       ['chat', 'Chat'],
@@ -3306,7 +4333,42 @@
       ['settings', 'Settings'],
     ];
 
-    function renderTable(users) {
+    async function refreshAdminTable() {
+      const data = await api('/api/admin_ai_access.php');
+      statusEl.textContent = `${data.users.length} user(s) · admins from SIAMTEX_ADMIN_GITHUB_LOGINS`;
+      renderTable(data.users || [], data.siteUsage);
+    }
+
+    async function saveTokenQuota(userId, input) {
+      const raw = String(input.value || '').trim().replace(/,/g, '');
+      const tokenQuota = raw === '' ? null : Number(raw);
+      if (raw !== '' && (!Number.isFinite(tokenQuota) || tokenQuota < 0)) {
+        toast('Quota must be a non-negative number or empty for unlimited', 'error');
+        return;
+      }
+      input.disabled = true;
+      try {
+        await api('/api/admin_ai_access.php', {
+          method: 'PATCH',
+          json: { userId, tokenQuota },
+        });
+        toast('Token quota saved', 'ok');
+        await refreshAdminTable();
+      } catch (e) {
+        toast(e.message, 'error');
+      } finally {
+        input.disabled = false;
+      }
+    }
+
+    function renderTable(users, siteUsage) {
+      if (siteUsage?.totalTokens) {
+        siteEl.classList.remove('hidden');
+        siteEl.innerHTML = `<strong>All users:</strong> ${formatTokens(siteUsage.totalTokens)} tokens
+          (${formatTokens(siteUsage.promptTokens)} in · ${formatTokens(siteUsage.completionTokens)} out · ${siteUsage.callCount} calls)`;
+      } else {
+        siteEl.classList.add('hidden');
+      }
       if (!users.length) {
         tableEl.innerHTML = '<p class="ai-disclaimer">No users yet.</p>';
         return;
@@ -3317,7 +4379,8 @@
             <tr>
               <th>User</th>
               ${featureCols.map(([, label]) => `<th>${esc(label)}</th>`).join('')}
-              <th>Tokens</th>
+              <th>Token use</th>
+              <th>Quota</th>
             </tr>
           </thead>
           <tbody>
@@ -3334,7 +4397,12 @@
                   <td class="admin-ai-check">
                     ${u.isAdmin ? '✓' : `<input type="checkbox" data-feature="${esc(key)}" ${u.permissions?.[key] ? 'checked' : ''} />`}
                   </td>`).join('')}
-                <td class="admin-ai-tokens">${formatTokens(u.aiUsage?.totalTokens || 0)}</td>
+                <td class="admin-ai-tokens">${esc(formatQuotaUsage(u.aiUsage, u.tokenQuota))}</td>
+                <td class="admin-ai-quota">
+                  <input type="text" class="admin-ai-quota-input" data-user-id="${u.id}"
+                    value="${u.tokenQuota ? esc(String(u.tokenQuota)) : ''}"
+                    placeholder="∞" title="Leave empty for unlimited tokens" />
+                </td>
               </tr>`).join('')}
           </tbody>
         </table>`;
@@ -3355,6 +4423,7 @@
               json: { userId, permissions },
             });
             toast('Saved AI access for user', 'ok');
+            await refreshAdminTable();
           } catch (e) {
             toast(e.message, 'error');
             cb.checked = !cb.checked;
@@ -3363,12 +4432,23 @@
           }
         });
       });
+
+      tableEl.querySelectorAll('.admin-ai-quota-input').forEach((input) => {
+        input.addEventListener('change', () => {
+          const userId = Number(input.getAttribute('data-user-id'));
+          if (userId) saveTokenQuota(userId, input);
+        });
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            input.blur();
+          }
+        });
+      });
     }
 
     try {
-      const data = await api('/api/admin_ai_access.php');
-      statusEl.textContent = `${data.users.length} user(s) · admins from SIAMTEX_ADMIN_GITHUB_LOGINS`;
-      renderTable(data.users || []);
+      await refreshAdminTable();
     } catch (e) {
       statusEl.textContent = e.message;
       tableEl.innerHTML = '';

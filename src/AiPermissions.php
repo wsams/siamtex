@@ -53,6 +53,9 @@ final class AiPermissions
             return false;
         }
         $perms = $this->forUser($userId);
+        if ($feature === self::ASSIST) {
+            return !empty($perms[self::ASSIST]) || !empty($perms[self::CHAT]);
+        }
         return !empty($perms[$feature]);
     }
 
@@ -71,6 +74,71 @@ final class AiPermissions
         }
     }
 
+    /** null or ≤0 = unlimited */
+    public function tokenQuotaForUser(int $userId): ?int
+    {
+        $row = $this->loadRow($userId);
+        if ($row === null || $row['token_quota'] === null) {
+            return null;
+        }
+        $q = (int) $row['token_quota'];
+        return $q > 0 ? $q : null;
+    }
+
+    public function assertWithinTokenQuota(int $userId): void
+    {
+        $quota = $this->tokenQuotaForUser($userId);
+        if ($quota === null) {
+            return;
+        }
+        $usage = $this->usageForUser($userId);
+        if ($usage['totalTokens'] >= $quota) {
+            throw new RuntimeException(
+                'AI token quota reached for your account (' . number_format($quota) . ' tokens). Ask an administrator.'
+            );
+        }
+    }
+
+    /** @return array{promptTokens:int, completionTokens:int, totalTokens:int, callCount:int} */
+    public function siteUsageTotals(): array
+    {
+        $row = $this->store->pdo()->query(
+            'SELECT COALESCE(SUM(prompt_tokens),0) AS p, COALESCE(SUM(completion_tokens),0) AS c, COUNT(*) AS n FROM ai_calls'
+        )->fetch() ?: ['p' => 0, 'c' => 0, 'n' => 0];
+        $prompt = (int) $row['p'];
+        $completion = (int) $row['c'];
+        return [
+            'promptTokens' => $prompt,
+            'completionTokens' => $completion,
+            'totalTokens' => $prompt + $completion,
+            'callCount' => (int) $row['n'],
+        ];
+    }
+
+    public function updateTokenQuota(int $targetUserId, ?int $tokenQuota, int $adminUserId): ?int
+    {
+        $target = $this->store->loadUser($targetUserId);
+        if ($target === null) {
+            throw new RuntimeException('User not found.');
+        }
+        $stored = ($tokenQuota === null || $tokenQuota <= 0) ? null : $tokenQuota;
+        $now = Store::now();
+        $existing = $this->loadRow($targetUserId);
+        if ($existing) {
+            $st = $this->store->pdo()->prepare(
+                'UPDATE user_ai_permissions SET token_quota = ?, updated_at = ?, updated_by = ? WHERE user_id = ?'
+            );
+            $st->execute([$stored, $now, $adminUserId, $targetUserId]);
+        } else {
+            $st = $this->store->pdo()->prepare(
+                'INSERT INTO user_ai_permissions (user_id, ai_chat, ai_create_project, ai_assist, ai_fix_errors, ai_settings, token_quota, updated_at, updated_by)
+                 VALUES (?,0,0,0,0,0,?,?,?)'
+            );
+            $st->execute([$targetUserId, $stored, $now, $adminUserId]);
+        }
+        return $stored;
+    }
+
     public function requireAdmin(array $user): void
     {
         if (!$this->isAdmin($user)) {
@@ -81,14 +149,14 @@ final class AiPermissions
     /**
      * @return list<array{
      *   id:int, name:string, login:?string, provider:string, avatarUrl:?string,
-     *   isAdmin:bool, permissions:array, aiUsage:array
+     *   isAdmin:bool, permissions:array, aiUsage:array, tokenQuota:?int
      * }>
      */
     public function listUsersForAdmin(): array
     {
         $st = $this->store->pdo()->query(
             'SELECT u.id, u.provider, u.provider_login, u.name, u.avatar_url, u.is_admin,
-                    p.ai_chat, p.ai_create_project, p.ai_assist, p.ai_fix_errors, p.ai_settings
+                    p.ai_chat, p.ai_create_project, p.ai_assist, p.ai_fix_errors, p.ai_settings, p.token_quota
              FROM users u
              LEFT JOIN user_ai_permissions p ON p.user_id = u.id
              ORDER BY u.is_admin DESC, COALESCE(u.provider_login, u.name), u.id'
@@ -99,6 +167,12 @@ final class AiPermissions
             $isAdmin = !empty($row['is_admin']);
             $perms = $isAdmin ? $this->allGranted() : $this->rowToPublic($row);
             $usage = $this->usageForUser($id);
+            $tokenQuota = $row['token_quota'] !== null && (int) $row['token_quota'] > 0
+                ? (int) $row['token_quota'] : null;
+            if ($tokenQuota !== null) {
+                $usage['tokenQuota'] = $tokenQuota;
+                $usage['quotaRemaining'] = max(0, $tokenQuota - $usage['totalTokens']);
+            }
             $out[] = [
                 'id' => $id,
                 'name' => (string) ($row['name'] ?: $row['provider_login'] ?: 'User'),
@@ -108,6 +182,7 @@ final class AiPermissions
                 'isAdmin' => $isAdmin,
                 'permissions' => $perms,
                 'aiUsage' => $usage,
+                'tokenQuota' => $tokenQuota,
             ];
         }
         return $out;
@@ -209,6 +284,10 @@ final class AiPermissions
             self::FIX_ERRORS => !empty($row['ai_fix_errors']),
             self::SETTINGS => !empty($row['ai_settings']),
         ];
+        // Structured AI edit (file/project) ships with chat — same users expect both.
+        if ($perms[self::CHAT]) {
+            $perms[self::ASSIST] = true;
+        }
         $perms['any'] = $perms[self::CHAT] || $perms[self::CREATE_PROJECT] || $perms[self::ASSIST]
             || $perms[self::FIX_ERRORS] || $perms[self::SETTINGS];
         return $perms;

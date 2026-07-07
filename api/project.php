@@ -29,6 +29,12 @@ try {
             ]);
         }
         $p = stx_projects()->requireRole($user, $id, ['owner', 'edit', 'view']);
+        $userRole = $p['_role'];
+        $defaultModel = stx_ai()->userDefaultConfig((int) $user['id'])->model;
+        $migrated = stx_projects()->ensureAiModel($id, $defaultModel);
+        if ($migrated !== null) {
+            $p = $migrated + ['_role' => $userRole];
+        }
         stx_json([
             'project' => stx_projects()->publicProject($p),
             'files' => stx_projects()->listFiles($id),

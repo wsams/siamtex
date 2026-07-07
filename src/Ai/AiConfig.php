@@ -80,6 +80,21 @@ final class AiConfig
         ];
     }
 
+    public function withModel(string $model): self
+    {
+        $model = trim($model);
+        return new self(
+            enabled: $this->enabled,
+            provider: $this->provider,
+            baseUrl: $this->baseUrl,
+            model: $model,
+            apiKey: $this->apiKey,
+            maxTokens: $this->maxTokens,
+            timeoutSeconds: $this->timeoutSeconds,
+            fromEnv: false,
+        );
+    }
+
     public function validate(): void
     {
         if (!$this->enabled) {

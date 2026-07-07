@@ -10,6 +10,7 @@ final class AiChatResult
         public readonly string $content,
         public readonly AiUsage $usage,
         public readonly ?string $finishReason = null,
+        public readonly string $reasoning = '',
     ) {
     }
 

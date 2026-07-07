@@ -152,6 +152,7 @@ Rebuild SiamTeX as a beautiful, responsive, security-first LaTeX IDE in the brow
 | F-101 | **Per-user AI permissions** (off by default for new users): `chat`, `createProject`, `assist`, `fixErrors`, `settings` (BYOK). Enforced server-side on every AI endpoint. UI hides unavailable features. |
 | F-102 | **Administrators** — GitHub logins listed in `SIAMTEX_ADMIN_GITHUB_LOGINS` receive full AI access and an **AI access** admin UI to toggle permissions per user (`api/admin_ai_access.php`). Apply env changes with `scripts/sync-ai-admins.php` when needed. |
 | F-103 | **Token usage** — track AI token consumption per user and per project; surface summaries in the dashboard, project workspace, and chat panel. |
+| F-104 | **Per-user token quotas** — administrators may set optional lifetime token caps per user (enforced server-side); **AI access** shows per-user usage, quotas, and site-wide totals. |
 
 ---
 
@@ -358,7 +359,7 @@ TeX Live medium images are typically **~1.5–3 GB** on disk; a single compile c
 | 19 | Security throughout | S-01–S-10 |
 | 20 | Beautiful, responsive UI | F-91, N-01 |
 | 21 | Best judgment & current best practices | §6, F-04–F-05, N-05–N-06 |
-| 22 | Optional AI chat, permissions, usage tracking | F-95–F-103, S-14 |
+| 22 | Optional AI chat, permissions, usage tracking | F-95–F-104, S-14 |
 | 23 | Multiple PDFs per project (e.g. resume + cover letter) | F-35–F-36, F-43 |
 
 ---

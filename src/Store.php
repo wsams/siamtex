@@ -146,7 +146,37 @@ CREATE INDEX IF NOT EXISTS idx_file_revisions_lookup ON file_revisions(project_i
 SQL);
         $this->migrateAiCallsColumns();
         $this->migrateUserAdminAndAiPermissions();
+        $this->migrateAiTokenQuota();
         $this->migrateBuildEntryFile();
+        $this->migrateProjectAiModel();
+        $this->migrateAiAssistWithChat();
+    }
+
+    /** Users with chat should also have structured AI assist (edit file / project). */
+    private function migrateAiAssistWithChat(): void
+    {
+        $this->db->exec(
+            'UPDATE user_ai_permissions SET ai_assist = 1, updated_at = datetime(\'now\')
+             WHERE ai_chat = 1 AND ai_assist = 0'
+        );
+    }
+
+    private function migrateProjectAiModel(): void
+    {
+        $cols = $this->db->query('PRAGMA table_info(projects)')->fetchAll(PDO::FETCH_ASSOC);
+        $names = array_column($cols, 'name');
+        if (!in_array('ai_model', $names, true)) {
+            $this->db->exec('ALTER TABLE projects ADD COLUMN ai_model TEXT');
+        }
+    }
+
+    private function migrateAiTokenQuota(): void
+    {
+        $cols = $this->db->query('PRAGMA table_info(user_ai_permissions)')->fetchAll(PDO::FETCH_ASSOC);
+        $names = array_column($cols, 'name');
+        if (!in_array('token_quota', $names, true)) {
+            $this->db->exec('ALTER TABLE user_ai_permissions ADD COLUMN token_quota INTEGER');
+        }
     }
 
     private function migrateBuildEntryFile(): void

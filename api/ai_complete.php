@@ -27,7 +27,8 @@ try {
     }
 
     if ($mode === 'fix_problems') {
-        $result = $ai->fixProblems($user, $projectId);
+        $entry = trim((string) ($body['entry'] ?? ''));
+        $result = $ai->fixProblems($user, $projectId, $entry !== '' ? $entry : null);
         stx_json(['mode' => 'fix_problems', 'result' => $result]);
     }
 

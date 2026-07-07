@@ -87,11 +87,13 @@ TXT;
         foreach ($files as $path => $content) {
             $bundle .= "\n<file path=\"{$path}\">\n{$content}\n</file>";
         }
-        $log = $logTail !== '' ? "\n\nRecent build log (tail):\n<log>\n{$logTail}\n</log>" : '';
+        $log = $logTail !== '' ? "\n\nFull build log (read carefully — errors are often only visible here):\n<log>\n{$logTail}\n</log>" : '';
         $user = <<<TXT
 The LaTeX project failed to compile. Fix these problems with **minimal edits** — change only what is required to compile. Do not rewrite unrelated sections or invent new macros.
 
-Compile diagnostics:
+The structured diagnostics below may be incomplete. **Trust the build log** for the real error lines, file names, and missing package messages.
+
+Compile diagnostics (may be partial):
 {$errText}
 {$log}
 

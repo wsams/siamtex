@@ -76,8 +76,9 @@ final class OpenAiCompatibleClient
         callable $onDelta,
         ?callable $shouldAbort = null,
         ?callable $onUsage = null,
+        ?callable $onReasoningDelta = null,
     ): AiChatResult {
-        return $this->streamRequest($config, $messages, false, $onDelta, null, $shouldAbort, $onUsage);
+        return $this->streamRequest($config, $messages, false, $onDelta, null, $shouldAbort, $onUsage, $onReasoningDelta);
     }
 
     /**
@@ -100,6 +101,7 @@ final class OpenAiCompatibleClient
             $onUsage,
             $shouldAbort,
             $onUsage,
+            null,
         );
     }
 
@@ -123,6 +125,7 @@ final class OpenAiCompatibleClient
         ?callable $onProgress,
         ?callable $shouldAbort,
         ?callable $onUsage,
+        ?callable $onReasoningDelta = null,
     ): AiChatResult {
         if (!function_exists('curl_init')) {
             if ($ollamaJsonFormat) {
@@ -188,6 +191,7 @@ final class OpenAiCompatibleClient
                 &$fullReasoning,
                 &$finishReason,
                 $onDelta,
+                $onReasoningDelta,
                 $shouldAbort,
                 $emitUsage,
             ): int {
@@ -215,7 +219,11 @@ final class OpenAiCompatibleClient
                     }
                     if ($piece['reasoning'] !== '') {
                         $fullReasoning .= $piece['reasoning'];
-                        $onDelta($piece['reasoning']);
+                        if ($onReasoningDelta !== null) {
+                            $onReasoningDelta($piece['reasoning']);
+                        } else {
+                            $onDelta($piece['reasoning']);
+                        }
                         $emitUsage(AiUsage::estimateCompletionChars(strlen($fullContent) + strlen($fullReasoning)));
                     }
                 }
@@ -256,7 +264,7 @@ final class OpenAiCompatibleClient
         $onProgress?->__invoke($usage);
         $onUsage?->__invoke($usage);
 
-        return new AiChatResult($content, $usage, $finishReason);
+        return new AiChatResult($content, $usage, $finishReason, $fullReasoning);
     }
 
     /**
@@ -308,5 +316,99 @@ final class OpenAiCompatibleClient
             throw new RuntimeException('AI provider returned an empty response. Try again or switch models.');
         }
         return $content;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function listModels(AiConfig $config): array
+    {
+        $config->validate();
+        $names = [];
+        if ($config->provider === 'ollama') {
+            $names = array_merge($names, $this->fetchOllamaTagModels($config));
+        }
+        $names = array_merge($names, $this->fetchOpenAiModels($config));
+        $names = array_values(array_unique(array_filter(array_map('trim', $names))));
+        sort($names, SORT_NATURAL | SORT_FLAG_CASE);
+        if ($config->model !== '' && !in_array($config->model, $names, true)) {
+            array_unshift($names, $config->model);
+        }
+        return $names;
+    }
+
+    /** @return list<string> */
+    private function fetchOllamaTagModels(AiConfig $config): array
+    {
+        $root = preg_replace('#/v1/?$#', '', rtrim($config->baseUrl, '/'));
+        if ($root === '') {
+            return [];
+        }
+        $url = $root . '/api/tags';
+        $raw = $this->httpGet($url, $config->apiKey);
+        if ($raw === null) {
+            return [];
+        }
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            return [];
+        }
+        $out = [];
+        foreach ($data['models'] ?? [] as $m) {
+            if (is_array($m) && !empty($m['name'])) {
+                $out[] = (string) $m['name'];
+            }
+        }
+        return $out;
+    }
+
+    /** @return list<string> */
+    private function fetchOpenAiModels(AiConfig $config): array
+    {
+        $url = rtrim($config->baseUrl, '/') . '/models';
+        $raw = $this->httpGet($url, $config->apiKey);
+        if ($raw === null) {
+            return [];
+        }
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            return [];
+        }
+        $out = [];
+        foreach ($data['data'] ?? [] as $m) {
+            if (is_array($m) && !empty($m['id'])) {
+                $out[] = (string) $m['id'];
+            }
+        }
+        return $out;
+    }
+
+    private function httpGet(string $url, string $apiKey): ?string
+    {
+        UrlGuard::assertAllowedBaseUrl($url);
+        $headers = "Accept: application/json\r\n";
+        if ($apiKey !== '') {
+            $headers .= 'Authorization: Bearer ' . $apiKey . "\r\n";
+        }
+        $ctx = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'header' => $headers,
+                'timeout' => min(30, max(5, (int) (getenv('SIAMTEX_AI_TIMEOUT') ?: 30))),
+                'ignore_errors' => true,
+            ],
+        ]);
+        $raw = @file_get_contents($url, false, $ctx);
+        if ($raw === false) {
+            return null;
+        }
+        $code = 0;
+        if (isset($http_response_header[0]) && preg_match('/\s(\d{3})\s/', $http_response_header[0], $m)) {
+            $code = (int) $m[1];
+        }
+        if ($code >= 400) {
+            return null;
+        }
+        return $raw;
     }
 }
