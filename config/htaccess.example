@@ -10,7 +10,7 @@ Options -Indexes
     RewriteEngine On
 
     # Runtime, source, operator docs — not for HTTP (see AGENTS.md)
-    RewriteRule ^(data|vendor|work|config|scripts|docker|docs|src|templates|\.git|\.cursor)(/|$) - [F,L]
+    RewriteRule ^(data|vendor|work|config|scripts|docker|docs|src|templates|\.git|\.github|\.cursor)(/|$) - [F,L]
 </IfModule>
 
 # Dotfiles (.env, .gitignore, …)

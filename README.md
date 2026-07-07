@@ -62,164 +62,57 @@ Provider setup: [docs/ai-providers.md](./docs/ai-providers.md) · architecture: 
 
 ---
 
-## Screenshots
+## Scenarios
 
-Click any image for the full-size capture. Thumbnails keep the README readable on GitHub.
+Screenshots live in `docs/screenshots/` for people who want to browse raw captures, but they go stale quickly as the UI evolves. The README focuses on the scenarios instead of embedding thumbnail galleries.
 
 ### Getting started
 
-**Welcome & sign-in** — GitHub OAuth when you want it, or run locally without a sign-in wall.
+| Scenario | What it shows |
+|---|---|
+| Welcome & sign-in | GitHub OAuth when you want it, or local solo mode without a sign-in wall. |
+| Project dashboard | Searchable project list, template starters, AI project creation, import/export zip. |
+| Editor + live PDF | Multi-file editing, Insert menus, compile errors you can click, preview beside source. |
+| Add files & assets | Upload images, bibliographies, and extra `.tex` files without leaving the browser. |
 
-<a href="docs/screenshots/not-signed-in.png"><img src="docs/screenshots/not-signed-in-thumb.png" alt="SiamTeX welcome screen" width="480" /></a>
+### AI chat for questions *(alpha)*
 
-**Project dashboard** — your work, templates for articles, homework, and resumes, import/export zip.
+Ask plain-English questions in the sidebar chat, attach project files with `@file`, and copy LaTeX from the reply when you just want help thinking or typesetting.
 
-<a href="docs/screenshots/signed-in-dashboard.png"><img src="docs/screenshots/signed-in-dashboard-thumb.png" alt="SiamTeX project dashboard" width="480" /></a>
+### AI editing flow *(alpha)*
 
-**Editor + live PDF** — multi-file projects, Insert menus for common LaTeX, compile errors you can click, preview beside your source.
+| Scenario | What happens |
+|---|---|
+| Start from blank | Create a project, open the editor, and let AI draft the first pass from a plain-English instruction. |
+| Filter or rewrite | Use the AI sidebar to pick a target file, choose a filter, review token usage/thinking, and apply the result back into the editor. |
+| Review before accept | Watch the stream in chat, inspect the generated LaTeX, then re-apply or continue editing manually. |
+| Compile the result | Build immediately after the edit and see the PDF preview update beside the source. |
 
-<a href="docs/screenshots/edit-document.png"><img src="docs/screenshots/edit-document-thumb.png" alt="SiamTeX editor with live PDF preview" width="480" /></a>
+### Image workflow
 
-**Add files & assets** — upload images, spin up `.tex` partials, bibliographies, and sections without leaving the browser.
+| Scenario | What happens |
+|---|---|
+| Upload an asset | Add `png`, `jpg`, `pdf`, bibliography, or extra source files to the project. |
+| Ask AI to place it | Tell AI where to insert the figure; it can use the filename already in the project. |
+| Tweak layout in place | Ask AI to resize, re-center, or restyle the figure without hunting through LaTeX manually. |
+| Rebuild and verify | Compile again and confirm the PDF layout looks right. |
 
-<a href="docs/screenshots/upload-files.png"><img src="docs/screenshots/upload-files-thumb.png" alt="SiamTeX add file dialog" width="480" /></a>
+### Recover from compile errors
 
-### AI chat — math from a question *(alpha)*
+| Scenario | What happens |
+|---|---|
+| Problems panel catches the error | Structured diagnostics show file, line, and message. |
+| AI fix problems | SiamTeX sends the build log and relevant sources to the model. |
+| Minimal repair suggestion | Review the proposed fix before it touches the editor. |
+| Clean compile again | Accept the fix, rebuild, and confirm the PDF preview comes back. |
 
-Separate from the structured **AI** edit tools: open **Chat**, ask how to typeset something in plain language, and copy the LaTeX from the reply’s code block into your document. Compile to see the rendered math in the PDF preview — no need to memorize `\frac` or environment syntax.
+### Version history
 
-<a href="docs/screenshots/chat-01-math-via-chat.png"><img src="docs/screenshots/chat-01-math-via-chat-thumb.png" alt="AI chat suggesting LaTeX for a math expression, pasted into the editor with the equation in the PDF preview" width="480" /></a>
-
-### AI assist *(alpha)*
-
-End-to-end example: ask the model to turn a blank article into a pancake recipe, review the suggestion, accept, and compile. AI runs on the provider you configure (here, Ollama over Tailscale).
-
-**1. New project** — pick a template and name; *Blank article* is enough when the AI will write the body.
-
-<a href="docs/screenshots/ai-01-new-project.png"><img src="docs/screenshots/ai-01-new-project-thumb.png" alt="Create a new Pancake Recipe project" width="480" /></a>
-
-**2. Starter editor** — default `main.tex` and an empty PDF preview before you invoke AI.
-
-<a href="docs/screenshots/ai-02-blank-editor.png"><img src="docs/screenshots/ai-02-blank-editor-thumb.png" alt="Blank project editor before AI" width="480" /></a>
-
-**3. AI assist dialog** — click **AI**, choose scope (*Current file* or whole project), type a plain-English instruction, optional reference text, or a preset (*Polish*, *Fix LaTeX*, *Expand*).
-
-<a href="docs/screenshots/ai-03-ai-dialog.png"><img src="docs/screenshots/ai-03-ai-dialog-thumb.png" alt="AI assist dialog with pancake recipe instruction" width="480" /></a>
-
-**4. While it runs** — progress UI with elapsed time and cancel; local models over Tailscale may take a minute or two.
-
-<a href="docs/screenshots/ai-04-ai-running.png"><img src="docs/screenshots/ai-04-ai-running-thumb.png" alt="AI assist progress while the model runs" width="480" /></a>
-
-**5. Review suggestion** — read the proposed LaTeX in the preview; click **Accept into editor** only when it looks right.
-
-<a href="docs/screenshots/ai-05-ai-suggestion.png"><img src="docs/screenshots/ai-05-ai-suggestion-thumb.png" alt="AI returns suggested LaTeX for review" width="480" /></a>
-
-**6. After accept** — updated source in the editor and a rendered PDF from **Compile** (auto-compile also runs after accept).
-
-<a href="docs/screenshots/ai-06-pdf-result.png"><img src="docs/screenshots/ai-06-pdf-result-thumb.png" alt="Rendered PDF after accepting AI edits" width="480" /></a>
-
-### Upload an image, insert it with AI, resize in place
-
-Continuing the pancake-recipe project: upload a photo, ask AI to place it in the document, then tweak the layout — still with review-before-accept at every step.
-
-**7. Upload the asset** — use **+ File → Choose files…** to add `pancakes.png` to the project (shows in the file list beside `main.tex`).
-
-<a href="docs/screenshots/wf-01-photo-uploaded.png"><img src="docs/screenshots/wf-01-photo-uploaded-thumb.png" alt="Uploaded pancakes.png in the file list" width="480" /></a>
-
-**8. Ask AI to insert the figure** — open **AI**, keep scope on the current file, and describe placement (centered, border, padding, etc.). The model sees your uploaded filename.
-
-<a href="docs/screenshots/wf-02-ai-insert-photo.png"><img src="docs/screenshots/wf-02-ai-insert-photo-thumb.png" alt="AI assist dialog asking to insert pancakes.png in the introduction" width="480" /></a>
-
-<table>
-<tr>
-<td width="50%" valign="top">
-<strong>9a. While it runs</strong> — progress UI while the model edits <code>main.tex</code>.<br/>
-<a href="docs/screenshots/wf-03-ai-processing.png"><img src="docs/screenshots/wf-03-ai-processing-thumb.png" alt="AI processing insert-photo request" width="400" /></a>
-</td>
-<td width="50%" valign="top">
-<strong>9b. Review the suggestion</strong> — <code>\includegraphics</code>, figure environment, etc. Accept only when it looks right.<br/>
-<a href="docs/screenshots/wf-04-ai-suggestion-insert.png"><img src="docs/screenshots/wf-04-ai-suggestion-insert-thumb.png" alt="AI suggested LaTeX to insert the photo" width="400" /></a>
-</td>
-</tr>
-</table>
-
-**10. Photo in the PDF** — after accept and compile, the introduction shows the centered image with a border.
-
-<a href="docs/screenshots/wf-05-pdf-with-photo.png"><img src="docs/screenshots/wf-05-pdf-with-photo-thumb.png" alt="PDF preview with pancakes photo in the introduction" width="480" /></a>
-
-<table>
-<tr>
-<td width="50%" valign="top">
-<strong>11a. Resize request</strong> — tell AI the image is too large and ask for a smaller width.<br/>
-<a href="docs/screenshots/wf-06-ai-resize-request.png"><img src="docs/screenshots/wf-06-ai-resize-request-thumb.png" alt="AI dialog asking to shrink the photo" width="400" /></a>
-</td>
-<td width="50%" valign="top">
-<strong>11b. Suggested tweak</strong> — updated <code>width=</code> or similar in the figure code.<br/>
-<a href="docs/screenshots/wf-07-ai-resize-suggestion.png"><img src="docs/screenshots/wf-07-ai-resize-suggestion-thumb.png" alt="AI suggestion to resize the figure" width="400" /></a>
-</td>
-</tr>
-</table>
-
-**12. Smaller figure in the PDF** — accept, recompile, and the photo fits the page better.
-
-<a href="docs/screenshots/wf-08-pdf-resized.png"><img src="docs/screenshots/wf-08-pdf-resized-thumb.png" alt="PDF with resized pancakes photo" width="480" /></a>
-
-### Fix a broken compile with AI
-
-To demo recovery, the document was intentionally broken. **Problems** lists the error; **AI fix problems** sends diagnostics and affected files to your model.
-
-**13. Good state before the break** — the recipe with a working figure, for comparison when browsing history later.
-
-<a href="docs/screenshots/wf-16-before-break.png"><img src="docs/screenshots/wf-16-before-break-thumb.png" alt="Editor and PDF before the document was broken" width="480" /></a>
-
-<table>
-<tr>
-<td width="50%" valign="top">
-<strong>14a. Compile error</strong> — structured problem in the bottom panel (file, line, message).<br/>
-<a href="docs/screenshots/wf-09-compile-error.png"><img src="docs/screenshots/wf-09-compile-error-thumb.png" alt="Problems panel showing a LaTeX compile error" width="400" /></a>
-</td>
-<td width="50%" valign="top">
-<strong>14b. AI fix dialog</strong> — click <strong>AI fix problems</strong>; review the listed errors before running.<br/>
-<a href="docs/screenshots/wf-10-ai-fix-dialog.png"><img src="docs/screenshots/wf-10-ai-fix-dialog-thumb.png" alt="AI fix compile problems dialog" width="400" /></a>
-</td>
-</tr>
-</table>
-
-<table>
-<tr>
-<td width="50%" valign="top">
-<strong>15a. Analyzing</strong> — AI reads the build log and source, then proposes a minimal fix.<br/>
-<a href="docs/screenshots/wf-11-ai-fix-running.png"><img src="docs/screenshots/wf-11-ai-fix-running-thumb.png" alt="AI fix problems progress spinner" width="400" /></a>
-</td>
-<td width="50%" valign="top">
-<strong>15b. Suggested fix</strong> — corrected LaTeX in the preview; accept to apply and recompile.<br/>
-<a href="docs/screenshots/wf-12-ai-fix-suggestion.png"><img src="docs/screenshots/wf-12-ai-fix-suggestion-thumb.png" alt="AI suggested fix for compile errors" width="400" /></a>
-</td>
-</tr>
-</table>
-
-**16. Building again** — after accepting the fix, the PDF preview returns and the error clears from **Problems**.
-
-<a href="docs/screenshots/wf-13-pdf-fixed.png"><img src="docs/screenshots/wf-13-pdf-fixed-thumb.png" alt="PDF preview after AI fix restored a successful compile" width="480" /></a>
-
-### Version history (branching undo tree)
-
-Every save, AI accept, and restore creates a node on a **per-file timeline** — like Vim’s undo tree. Pick any revision, diff against the current editor (or another version), then restore; restoring branches forward instead of deleting history.
-
-<table>
-<tr>
-<td width="50%" valign="top">
-<strong>17a. Timeline</strong> — open <strong>History</strong> to see branches for <code>main.tex</code>.<br/>
-<a href="docs/screenshots/wf-14-history-dialog.png"><img src="docs/screenshots/wf-14-history-dialog-thumb.png" alt="Version history dialog with branching timeline" width="400" /></a>
-</td>
-<td width="50%" valign="top">
-<strong>17b. Diff before restore</strong> — inspect the AI fix (or any edit) line-by-line before jumping back.<br/>
-<a href="docs/screenshots/wf-15-history-diff-fix.png"><img src="docs/screenshots/wf-15-history-diff-fix-thumb.png" alt="History diff showing the AI compile fix" width="400" /></a>
-</td>
-</tr>
-</table>
-
-Restore an older node to continue from that point; nothing is erased — a new branch grows from the revision you chose.
+| Scenario | What happens |
+|---|---|
+| Timeline view | Every save, AI apply, and restore becomes a node on a per-file branching timeline. |
+| Diff before restore | Compare the current editor against any earlier revision before jumping back. |
+| Branching restore | Restoring does not erase history; it grows a new branch from the point you chose. |
 
 ---
 
