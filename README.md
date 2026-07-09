@@ -58,7 +58,7 @@ Many products offer a browser editor and a PDF preview. Fewer let you **self-hos
 | Native spell check | [TODO](https://github.com/wsams/siamtex/issues/8) | Often | Often |
 | Comments / review mode | [TODO](https://github.com/wsams/siamtex/issues/5) | Often | Rare |
 | Git / GitHub project sync | [TODO](https://github.com/wsams/siamtex/issues/15) | Often | External git |
-| Word / DOCX import | [TODO](https://github.com/wsams/siamtex/issues/10) | Sometimes | Converters |
+| Word / DOCX import | **Yes** | Sometimes | Converters |
 | Large template marketplace | First-party ([expand](https://github.com/wsams/siamtex/issues/9)) | Often | CTAN |
 
 Full matrix, rationale, and issue links: **[docs/roadmap.md](./docs/roadmap.md)**.

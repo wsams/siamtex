@@ -194,13 +194,13 @@ If the model returns markdown fences, strip them in PHP before parse.
 | Format | Approach |
 |--------|----------|
 | `.txt`, `.md`, `.tex` | Read as UTF-8 text (size-capped). |
-| `.docx` | PHP library (e.g. `phpoffice/phpword`) or `unzip` + `word/document.xml` text extract. |
+| `.docx` | `SiamTeX\DocxExtractor` — `ZipArchive` + WordprocessingML text nodes only (no VBA/OLE execution). |
 | `.pdf` (later) | Optional `pdftotext` in a sandbox; lower priority. |
 
 Limits (suggested defaults):
 
-- Max upload **2–5 MB** per file, **3–5 files** per request.  
-- Truncate extracted text to a token budget (e.g. ~50–100k characters total) with a clear UI warning.  
+- Max upload **5 MB** per `.docx` (`SIAMTEX_MAX_DOCX_BYTES`), **3 files** per request (`SIAMTEX_MAX_DOCX_FILES`).  
+- Truncate extracted text to **100k characters** (`SIAMTEX_MAX_DOCX_EXTRACT_CHARS`) with a UI warning.  
 
 Extracted text is sent **only** to the user’s configured provider, not stored longer than needed (optional short-lived cache in encrypted temp, then wipe).
 
@@ -296,7 +296,7 @@ UI:
 
 Dependencies (Composer examples):
 
-- `phpoffice/phpword` for `.docx` (or a minimal XML extract to avoid heavy deps)  
+- PHP **zip** + **xml** / **dom** extensions for `.docx` extract (`DocxExtractor`; no `phpoffice/phpword` required)
 - PHP **curl** extension for streaming (not a Composer package)
 
 ---
@@ -317,7 +317,8 @@ Dependencies (Composer examples):
 
 ### Phase C — Word + polish
 
-- `.docx` extract  
+- `.docx` extract (OOXML ZIP + `word/document.xml`; macros never executed)
+- Import UI: Add file → Import Word; basic `.tex` save or AI convert with review-before-accept
 - Job-description tailor preset  
 - Anthropic adapter + OpenRouter preset buttons  
 

@@ -3565,6 +3565,14 @@
           </div>
         </div>
 
+        <div class="upload-box upload-box-docx" style="margin-top:12px">
+          <strong>Import Word (.docx)</strong>
+          <p>Extract text from a Word document (macros are never executed). Optionally convert to LaTeX with AI — you review before anything is written.</p>
+          <div class="modal-actions" style="margin-top:8px">
+            <button type="button" id="afDocxImport" class="primary">Import Word…</button>
+          </div>
+        </div>
+
         <hr class="modal-sep" />
 
         <p>Or create a starter / blank text file:</p>
@@ -3583,6 +3591,10 @@
       </div>`;
     document.body.appendChild(backdrop);
     backdrop.querySelector('#afCancel').onclick = () => backdrop.remove();
+    backdrop.querySelector('#afDocxImport').onclick = () => {
+      backdrop.remove();
+      showDocxImport().catch((e) => toast(e.message || 'Could not open Word import', 'error'));
+    };
 
     const uploadInput = backdrop.querySelector('#afUpload');
     const uploadCount = backdrop.querySelector('#afUploadCount');
@@ -3700,6 +3712,330 @@
         toast(e.message, 'error');
       }
     };
+  }
+
+  /**
+   * Word / DOCX import: extract text safely, optionally AI-convert with review-before-accept.
+   */
+  async function showDocxImport() {
+    if (!state.project?.id) {
+      toast('Open a project before importing Word', 'error');
+      return;
+    }
+    if (!canEditProject(state.project)) {
+      toast('You need edit access to import into this project', 'error');
+      return;
+    }
+    const canAi = hasAiAssist();
+    const maxBytes = 5 * 1024 * 1024;
+    const maxFiles = 3;
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal modal-wide">
+        <h2>Import Word (.docx)</h2>
+        <p class="ai-disclaimer">Text is extracted from the OOXML package only — <strong>macros are never executed</strong>.
+          Max ${formatBytes(maxBytes)} per file, up to ${maxFiles} files. Review every change before accepting.</p>
+        <label class="upload-pick">
+          <span class="btn">Choose .docx…</span>
+          <input id="docxUpload" type="file" multiple accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+        </label>
+        <p id="docxUploadCount" class="upload-count"></p>
+        <p id="docxUploadErr" class="upload-err hidden" role="alert"></p>
+        <div id="docxExtractPreview" class="ai-preview hidden"></div>
+        <div id="docxAiOptions" class="hidden" style="margin-top:12px">
+          <label>Conversion goal</label>
+          <select id="docxGoal">
+            <option value="fill">Fill placeholders from the document</option>
+            <option value="replace">Replace project content from the document</option>
+            <option value="merge">Merge into existing sections only</option>
+            <option value="new">Create a fresh main.tex from the document</option>
+          </select>
+          <label style="margin-top:8px">Extra instruction (optional)</label>
+          <textarea id="docxInstruction" rows="3" placeholder="e.g. Put job history into experience.tex; keep my preamble"></textarea>
+        </div>
+        <div id="docxWaitMount" class="ai-wait-mount hidden"></div>
+        <div id="docxAiPreview" class="ai-preview hidden"></div>
+        <div class="modal-actions">
+          <button type="button" id="docxExtractBtn" class="primary">Extract text</button>
+          <button type="button" id="docxBasicBtn" class="hidden">Save as basic .tex</button>
+          <button type="button" id="docxAiBtn" class="primary hidden"${canAi ? '' : ' disabled title="AI assist not enabled"'}>Convert with AI…</button>
+          <button type="button" id="docxAcceptBtn" class="primary hidden">Accept changes</button>
+          <button type="button" id="docxClose">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(backdrop);
+
+    let extracted = [];
+    let pending = null;
+    const uploadInput = backdrop.querySelector('#docxUpload');
+    const countEl = backdrop.querySelector('#docxUploadCount');
+    const errEl = backdrop.querySelector('#docxUploadErr');
+    const extractPrev = backdrop.querySelector('#docxExtractPreview');
+    const aiOpts = backdrop.querySelector('#docxAiOptions');
+    const waitMount = backdrop.querySelector('#docxWaitMount');
+    const aiPrev = backdrop.querySelector('#docxAiPreview');
+    const extractBtn = backdrop.querySelector('#docxExtractBtn');
+    const basicBtn = backdrop.querySelector('#docxBasicBtn');
+    const aiBtn = backdrop.querySelector('#docxAiBtn');
+    const acceptBtn = backdrop.querySelector('#docxAcceptBtn');
+    const closeBtn = backdrop.querySelector('#docxClose');
+
+    const showErr = (msg) => {
+      errEl.textContent = msg;
+      errEl.classList.remove('hidden');
+    };
+    const clearErr = () => {
+      errEl.classList.add('hidden');
+      errEl.textContent = '';
+    };
+
+    uploadInput.addEventListener('change', () => {
+      clearErr();
+      pending = null;
+      acceptBtn.classList.add('hidden');
+      aiPrev.classList.add('hidden');
+      const list = uploadInput.files;
+      const n = list?.length || 0;
+      if (!n) {
+        countEl.textContent = '';
+        return;
+      }
+      const names = Array.from(list).map((f) => `${f.name} (${formatBytes(f.size)})`).join(', ');
+      countEl.textContent = `${n} file${n === 1 ? '' : 's'} selected: ${names}`;
+    });
+
+    closeBtn.onclick = () => backdrop.remove();
+
+    extractBtn.onclick = async () => {
+      clearErr();
+      const list = uploadInput.files;
+      if (!list?.length) {
+        showErr('Choose one or more .docx files.');
+        return;
+      }
+      if (list.length > maxFiles) {
+        showErr(`Too many files (max ${maxFiles}).`);
+        return;
+      }
+      for (const f of list) {
+        if (!/\.docx$/i.test(f.name)) {
+          showErr(`${f.name}: only .docx is supported.`);
+          return;
+        }
+        if (f.size > maxBytes) {
+          showErr(`${f.name} is ${formatBytes(f.size)} — max ${formatBytes(maxBytes)}.`);
+          return;
+        }
+      }
+      extractBtn.disabled = true;
+      extractBtn.textContent = 'Extracting…';
+      try {
+        const fd = new FormData();
+        fd.append('id', state.project.id);
+        if (list.length === 1) {
+          fd.append('file', list[0]);
+        } else {
+          Array.from(list).forEach((f) => fd.append('files[]', f));
+        }
+        const res = await fetch(BASE + '/api/docx_import.php', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'X-SiamTeX-CSRF': '1' },
+          body: fd,
+        });
+        const raw = await res.text();
+        let data;
+        try {
+          data = JSON.parse(raw);
+        } catch {
+          throw new Error(raw.trim() || `Import failed (HTTP ${res.status})`);
+        }
+        if (!res.ok) throw new Error(data.error || 'Import failed');
+        extracted = data.documents || [];
+        if (!extracted.length) throw new Error('No text extracted.');
+
+        extractPrev.classList.remove('hidden');
+        extractPrev.innerHTML = extracted.map((d) => {
+          const warn = (d.warnings || []).map((w) => `<li>${esc(w)}</li>`).join('');
+          const snippet = String(d.text || '').slice(0, 2500);
+          return `<h4>${esc(d.filename)} — ${d.charCount || 0} chars${d.truncated ? ' (truncated)' : ''}${d.hasMacros ? ' · macros ignored' : ''}</h4>
+            ${warn ? `<ul class="docx-warn">${warn}</ul>` : ''}
+            <pre>${esc(snippet)}${(d.text || '').length > 2500 ? '\n…' : ''}</pre>`;
+        }).join('');
+        if ((data.errors || []).length) {
+          extractPrev.innerHTML += `<p class="upload-err">${esc(data.errors.map((e) => e.filename + ': ' + e.error).join('; '))}</p>`;
+        }
+        basicBtn.classList.remove('hidden');
+        if (canAi) {
+          aiOpts.classList.remove('hidden');
+          aiBtn.classList.remove('hidden');
+        } else {
+          aiOpts.classList.add('hidden');
+          aiBtn.classList.add('hidden');
+        }
+        toast(`Extracted ${extracted.length} document${extracted.length === 1 ? '' : 's'}`, 'ok');
+      } catch (e) {
+        showErr(e.message || 'Extract failed');
+        toast(e.message || 'Extract failed', 'error');
+      } finally {
+        extractBtn.disabled = false;
+        extractBtn.textContent = 'Extract text';
+      }
+    };
+
+    basicBtn.onclick = async () => {
+      if (!extracted.length) return;
+      basicBtn.disabled = true;
+      try {
+        const used = new Set(state.files.map((f) => f.path));
+        let lastPath = null;
+        for (const doc of extracted) {
+          const base = (doc.filename || 'imported.docx').replace(/\.docx$/i, '') || 'imported';
+          let path = sanitizePath(base + '.tex') || 'imported.tex';
+          if (used.has(path) || state.contents[path] != null) {
+            let n = 2;
+            while (used.has(`${base}-${n}.tex`)) n += 1;
+            path = sanitizePath(`${base}-${n}.tex`);
+          }
+          const title = (doc.filename || 'Imported document').replace(/\.docx$/i, '');
+          // Minimal article: escape via server-side write of client-built body is fine —
+          // we build a simple escaped body here matching DocxExtractor::toBasicLatex intent.
+          const content = buildBasicLatexFromPlain(doc.text || '', title);
+          const meta = await api('/api/files.php?id=' + encodeURIComponent(state.project.id), {
+            method: 'PUT',
+            json: { path, content, source: 'import' },
+          });
+          state.files.push({
+            path: meta.file.path,
+            size: meta.file.size,
+            updatedAt: new Date().toISOString(),
+            binary: !!meta.file.binary,
+          });
+          state.contents[path] = content;
+          used.add(path);
+          lastPath = path;
+        }
+        renderFileList();
+        if (lastPath) await loadFile(lastPath);
+        toast(extracted.length === 1 ? `Saved ${lastPath}` : `Saved ${extracted.length} .tex files`, 'ok');
+        backdrop.remove();
+        scheduleAutoCompile();
+      } catch (e) {
+        toast(e.message, 'error');
+      } finally {
+        basicBtn.disabled = false;
+      }
+    };
+
+    aiBtn.onclick = async () => {
+      if (!extracted.length || !canAi) return;
+      const wait = createAiWait(waitMount, {
+        title: 'AI converting Word import',
+        streaming: true,
+        subtitle: 'Model proposes LaTeX files — nothing is written until you Accept.',
+        phases: [
+          'Sending extracted text and project files…',
+          'Model is structuring LaTeX from the document…',
+          'Generating file updates — review will appear when ready…',
+          'Still working — large documents take longer…',
+        ],
+      });
+      aiBtn.disabled = true;
+      extractBtn.disabled = true;
+      basicBtn.disabled = true;
+      closeBtn.disabled = true;
+      try {
+        const data = await runAiStreamRequest('/api/ai_stream.php', {
+          mode: 'import_docx',
+          projectId: state.project.id,
+          goal: backdrop.querySelector('#docxGoal').value || 'fill',
+          instruction: (backdrop.querySelector('#docxInstruction').value || '').trim(),
+          documents: extracted.map((d) => ({
+            filename: d.filename,
+            text: d.text,
+          })),
+        }, wait, [aiBtn, extractBtn, basicBtn, acceptBtn, closeBtn]);
+        pending = { mode: 'project', result: data.result };
+        applyAiUsageFromResponse(data);
+        aiPrev.classList.remove('hidden');
+        const names = Object.keys(data.result?.files || {}).join(', ');
+        aiPrev.innerHTML = `<h3>${esc(data.result?.summary || 'Proposed changes')}</h3>
+          <p>Files to update: ${esc(names || '(none)')}</p>
+          <p class="ai-usage-note">${esc(formatTokenUsage(data.usage, { detailed: true }))}</p>`;
+        if ((data.result?.notes || []).length) {
+          aiPrev.innerHTML += `<p>${esc(data.result.notes.join(' '))}</p>`;
+        }
+        for (const [fp, body] of Object.entries(data.result?.files || {})) {
+          aiPrev.innerHTML += `<h4>${esc(fp)}</h4><pre>${esc(String(body).slice(0, 4000))}</pre>`;
+        }
+        if (names) acceptBtn.classList.remove('hidden');
+        toast(`Conversion ready — ${formatTokenUsage(data.usage)} — review and Accept`, 'ok');
+      } catch (e) {
+        toast(e.message, e.message.includes('cancelled') ? '' : 'error');
+      } finally {
+        aiBtn.disabled = false;
+        extractBtn.disabled = false;
+        basicBtn.disabled = false;
+        closeBtn.disabled = false;
+      }
+    };
+
+    acceptBtn.onclick = async () => {
+      if (!pending) return;
+      try {
+        await applyAiFileChanges(pending);
+        toast('Import applied — recompiling', 'ok');
+        backdrop.remove();
+        scheduleAutoCompile();
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    };
+  }
+
+  /** Client-side basic LaTeX from plain text (mirrors DocxExtractor::toBasicLatex escaping). */
+  function buildBasicLatexFromPlain(plainText, title) {
+    const escTex = (s) => {
+      const map = {
+        '\\': '\\textbackslash{}',
+        '{': '\\{',
+        '}': '\\}',
+        '#': '\\#',
+        $: '\\$',
+        '%': '\\%',
+        '&': '\\&',
+        _: '\\_',
+        '~': '\\textasciitilde{}',
+        '^': '\\textasciicircum{}',
+      };
+      return String(s).replace(/[\\{}#$%&_~^]/g, (ch) => map[ch] || ch);
+    };
+    const safeTitle = escTex(title || 'Imported document');
+    const paras = String(plainText || '').trim().split(/\n{2,}/);
+    let body = '';
+    for (const p of paras) {
+      const line = p.trim().replace(/\n+/g, ' ');
+      if (!line) continue;
+      body += escTex(line) + '\n\n';
+    }
+    if (!body) body = '\\textit{(empty document)}\n\n';
+    return `\\documentclass[11pt]{article}
+\\usepackage[margin=1in]{geometry}
+\\usepackage[T1]{fontenc}
+\\usepackage[utf8]{inputenc}
+\\usepackage{lmodern}
+\\usepackage{hyperref}
+
+\\title{${safeTitle}}
+\\author{}
+\\date{}
+
+\\begin{document}
+\\maketitle
+
+${body}\\end{document}
+`;
   }
 
   async function showAiSettings() {

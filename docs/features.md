@@ -20,6 +20,7 @@ Detailed inventory of what ships today. For a short pitch, see the [README](../R
 - Curated first-party templates: **blank**, **homework**, **resume** (multi-file package), **article**, **book**
 - Import / export **zip**
 - Upload images, PDFs, bibliographies, and extra sources into a project
+- **Word / DOCX import** — extract text (macros never executed); save as basic `.tex` or optional AI conversion with review-before-accept
 - Soft-delete projects (retention purge is planned — see roadmap)
 
 ---

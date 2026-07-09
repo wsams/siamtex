@@ -197,6 +197,37 @@ final class Config
         return (int) (getenv('SIAMTEX_MAX_UPLOAD_BYTES') ?: (10 * 1024 * 1024));
     }
 
+    /**
+     * Max size for a single Word/DOCX import upload (default 5 MB).
+     * Capped at maxUploadBytes().
+     */
+    public static function maxDocxImportBytes(): int
+    {
+        $n = (int) (getenv('SIAMTEX_MAX_DOCX_BYTES') ?: (5 * 1024 * 1024));
+        if ($n < 1024) {
+            $n = 5 * 1024 * 1024;
+        }
+        return min($n, self::maxUploadBytes());
+    }
+
+    /**
+     * Max characters of extracted DOCX text kept for preview / AI context (default 100k).
+     */
+    public static function maxDocxExtractChars(): int
+    {
+        $n = (int) (getenv('SIAMTEX_MAX_DOCX_EXTRACT_CHARS') ?: '100000');
+        return $n > 5000 ? $n : 100000;
+    }
+
+    /**
+     * Max DOCX files per import request (default 3).
+     */
+    public static function maxDocxImportFiles(): int
+    {
+        $n = (int) (getenv('SIAMTEX_MAX_DOCX_FILES') ?: '3');
+        return $n > 0 ? min($n, 5) : 3;
+    }
+
     public static function artifactRetentionDays(): int
     {
         return (int) (getenv('SIAMTEX_ARTIFACT_RETENTION_DAYS') ?: '7');

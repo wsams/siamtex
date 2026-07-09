@@ -44,7 +44,7 @@ These are uncommon or weak in many hosted LaTeX products:
 | Admin AI quotas & per-user gates | Yes | Rare | N/A |
 | Multiple PDFs per project | Yes | Varies | Manual |
 | Branching file history in-app | Yes | History varies | External VCS |
-| Word / DOCX import | [TODO #10](https://github.com/wsams/siamtex/issues/10) | Sometimes | Converters |
+| Word / DOCX import | Yes ([#10](https://github.com/wsams/siamtex/issues/10)) | Sometimes | Converters |
 | Object storage (S3) backend | [TODO #12](https://github.com/wsams/siamtex/issues/12) | Common at scale | N/A |
 | One-command full Compose stack | Partial ([#14](https://github.com/wsams/siamtex/issues/14)) | N/A | N/A |
 
@@ -70,7 +70,6 @@ These are uncommon or weak in many hosted LaTeX products:
 | Smart bibliography UI (SPECS F-61) | [#7](https://github.com/wsams/siamtex/issues/7) |
 | Native spell check | [#8](https://github.com/wsams/siamtex/issues/8) |
 | Expanded templates / macros catalog (F-71) | [#9](https://github.com/wsams/siamtex/issues/9) |
-| Word / DOCX import | [#10](https://github.com/wsams/siamtex/issues/10) |
 | Format converters (F-80) | [#11](https://github.com/wsams/siamtex/issues/11) |
 
 ### Platform & ops
@@ -87,7 +86,7 @@ These are uncommon or weak in many hosted LaTeX products:
 | TODO | Issue |
 |------|--------|
 | Graduate AI from alpha | [#16](https://github.com/wsams/siamtex/issues/16) |
-| Richer import-assist (docx/md → project) | [#17](https://github.com/wsams/siamtex/issues/17) |
+| Richer import-assist (md → project; deeper docx flows) | [#17](https://github.com/wsams/siamtex/issues/17) — DOCX extract + AI convert shipped via [#10](https://github.com/wsams/siamtex/issues/10) |
 
 ---
 
