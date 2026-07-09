@@ -32,6 +32,7 @@
     editor: null,
     editorTheme: localStorage.getItem('siamtex_editor_theme') || 'material-darker',
     editorVim: localStorage.getItem('siamtex_editor_vim') === '1',
+    editorSpellcheck: localStorage.getItem('siamtex_editor_spellcheck') !== '0',
     autoTimer: null,
     compiling: false,
     chatOpen: false,
@@ -2674,6 +2675,10 @@
           <input type="checkbox" id="editorVim" />
           <span>Vim</span>
         </label>
+        <label class="editor-pref editor-pref-spell" title="Underline misspellings in prose (offline; ignores LaTeX commands and math). Right-click a word for suggestions.">
+          <input type="checkbox" id="editorSpellcheck" />
+          <span>Spell</span>
+        </label>
       </div>`;
   }
 
@@ -2715,15 +2720,45 @@
     state.editor.focus?.();
   }
 
+  function applyEditorSpellcheck() {
+    const cm = state.editor;
+    if (!cm || typeof cm.addOverlay !== 'function') return;
+    if (!window.SiamTeXSpell) {
+      if (state.editorSpellcheck) {
+        toast('Spell check could not load — hard-refresh and try again', 'error');
+      }
+      state.editorSpellcheck = false;
+      localStorage.setItem('siamtex_editor_spellcheck', '0');
+      const chk = document.getElementById('editorSpellcheck');
+      if (chk) chk.checked = false;
+      return;
+    }
+    if (!state.editorSpellcheck) {
+      window.SiamTeXSpell.detach(cm);
+      return;
+    }
+    window.SiamTeXSpell.attach(cm, BASE).catch((err) => {
+      console.warn('Spell check failed', err);
+      toast(err.message || 'Spell check dictionary failed to load', 'error');
+      state.editorSpellcheck = false;
+      localStorage.setItem('siamtex_editor_spellcheck', '0');
+      const chk = document.getElementById('editorSpellcheck');
+      if (chk) chk.checked = false;
+      window.SiamTeXSpell.detach(cm);
+    });
+  }
+
   function wireEditorPrefs() {
     const themeSel = document.getElementById('editorTheme');
     const vimChk = document.getElementById('editorVim');
+    const spellChk = document.getElementById('editorSpellcheck');
     if (!themeSel || !vimChk) return;
     if (!EDITOR_THEMES.some((t) => t.id === state.editorTheme)) {
       state.editorTheme = 'material-darker';
     }
     themeSel.value = state.editorTheme;
     vimChk.checked = state.editorVim;
+    if (spellChk) spellChk.checked = state.editorSpellcheck;
     themeSel.onchange = () => {
       state.editorTheme = themeSel.value;
       localStorage.setItem('siamtex_editor_theme', state.editorTheme);
@@ -2734,8 +2769,16 @@
       localStorage.setItem('siamtex_editor_vim', state.editorVim ? '1' : '0');
       applyEditorVim();
     };
+    if (spellChk) {
+      spellChk.onchange = () => {
+        state.editorSpellcheck = spellChk.checked;
+        localStorage.setItem('siamtex_editor_spellcheck', state.editorSpellcheck ? '1' : '0');
+        applyEditorSpellcheck();
+      };
+    }
     applyEditorTheme();
     applyEditorVim();
+    applyEditorSpellcheck();
   }
 
   function editorExtraKeys() {
@@ -2797,6 +2840,7 @@
 
   function destroyEditor() {
     if (state.editor) {
+      if (window.SiamTeXSpell) window.SiamTeXSpell.detach(state.editor);
       state.editor.toTextArea();
       state.editor = null;
     }
@@ -2878,6 +2922,7 @@
     initVimExCommands();
     applyEditorTheme();
     applyEditorVim();
+    applyEditorSpellcheck();
 
     state.editor.on('change', () => {
       markDirtyFromEditor();

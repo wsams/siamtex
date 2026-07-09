@@ -55,7 +55,7 @@ Many products offer a browser editor and a PDF preview. Fewer let you **self-hos
 | Branching in-app file history | **Yes** | Varies | Use git |
 | Real-time multi-cursor co-editing | [TODO](https://github.com/wsams/siamtex/issues/1) | Often | Rare |
 | Smart bibliography UI | [TODO](https://github.com/wsams/siamtex/issues/7) | Often | Varies |
-| Native spell check | [TODO](https://github.com/wsams/siamtex/issues/8) | Often | Often |
+| Native spell check | Yes | Often | Often |
 | Comments / review mode | [TODO](https://github.com/wsams/siamtex/issues/5) | Often | Rare |
 | Git / GitHub project sync | [TODO](https://github.com/wsams/siamtex/issues/15) | Often | External git |
 | Word / DOCX import | [TODO](https://github.com/wsams/siamtex/issues/10) | Sometimes | Converters |

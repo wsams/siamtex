@@ -19,7 +19,7 @@ Screenshots in `docs/screenshots/` go stale quickly as the UI evolves — prefer
 
 1. Open the base URL (solo mode) or sign in with GitHub.
 2. Create a project from the **homework**, **resume**, **article**, or **blank** template.
-3. Edit in the CodeMirror editor; use **Insert** menus for bold, headings, math, lists, and tables if you are new to LaTeX.
+3. Edit in the CodeMirror editor; use **Insert** menus for bold, headings, math, lists, and tables if you are new to LaTeX. Turn on **Spell** in the editor bar for offline underlines (right-click a misspelling for suggestions; commands and math are skipped).
 4. Watch the side-by-side PDF update after compile (debounced auto-compile or explicit Compile).
 5. Click a problem in the diagnostics panel to jump to the offending line.
 6. Export a zip when you need an offline copy.

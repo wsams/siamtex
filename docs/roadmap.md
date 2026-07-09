@@ -37,7 +37,7 @@ These are uncommon or weak in many hosted LaTeX products:
 | Git / GitHub project sync | [TODO #15](https://github.com/wsams/siamtex/issues/15) | Often yes | External git |
 | Rich template marketplace | First-party only ([#9](https://github.com/wsams/siamtex/issues/9)) | Often large catalogs | CTAN / local |
 | Smart bibliography UI | [TODO #7](https://github.com/wsams/siamtex/issues/7) | Often yes | Editor-dependent |
-| Native spell check | [TODO #8](https://github.com/wsams/siamtex/issues/8) | Often yes | Often yes |
+| Native spell check | Yes (offline, TeX-aware) | Often yes | Often yes |
 | Comments / review mode | [TODO #5](https://github.com/wsams/siamtex/issues/5) | Often yes | Rare |
 | Track changes | [TODO #6](https://github.com/wsams/siamtex/issues/6) | Sometimes | Rare |
 | AI assist (BYOK / local model) | Yes (alpha) | Vendor AI common; BYOK/local rare | Plugins vary |
@@ -68,7 +68,6 @@ These are uncommon or weak in many hosted LaTeX products:
 | TODO | Issue |
 |------|--------|
 | Smart bibliography UI (SPECS F-61) | [#7](https://github.com/wsams/siamtex/issues/7) |
-| Native spell check | [#8](https://github.com/wsams/siamtex/issues/8) |
 | Expanded templates / macros catalog (F-71) | [#9](https://github.com/wsams/siamtex/issues/9) |
 | Word / DOCX import | [#10](https://github.com/wsams/siamtex/issues/10) |
 | Format converters (F-80) | [#11](https://github.com/wsams/siamtex/issues/11) |
