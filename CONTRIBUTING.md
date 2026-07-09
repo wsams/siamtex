@@ -7,7 +7,7 @@ Thank you for helping improve SiamTeX — a browser-native LaTeX studio built fo
 ## Ways to contribute
 
 - **Bug reports** — open an issue with steps to reproduce, expected vs. actual behavior, and browser/PHP version if relevant.
-- **Feature ideas** — check [SPECS.md](./SPECS.md) first; open a discussion or issue describing the use case (especially for academic workflows).
+- **Feature ideas** — check [SPECS.md](./SPECS.md) and [docs/roadmap.md](./docs/roadmap.md) first; open a discussion or issue describing the use case (especially for academic workflows). Many gaps already have issues linked from the roadmap.
 - **Pull requests** — fix bugs, improve templates, tighten security, or polish UX. Keep changes focused.
 
 ## Before you start
@@ -33,7 +33,7 @@ Run without OAuth for solo mode — leave `SIAMTEX_GITHUB_CLIENT_ID` and `SIAMTE
 - **One logical change per PR** when possible (easier review).
 - **Match existing style** — PSR-4 PHP, minimal comments, no unrelated refactors.
 - **Security first** — compile jobs stay sandboxed; no secrets in repo; validate uploads and paths.
-- **Document behavior** — update README or SPECS if you change operator-facing setup.
+- **Document behavior** — update [docs/features.md](./docs/features.md), [docs/user-guide.md](./docs/user-guide.md), or SPECS if you change user-facing or operator-facing behavior; keep the README as the short marketing overview.
 - **Test manually** — create a project, edit, compile, export zip, and (if OAuth is configured) sign in.
 
 ## What we will not merge

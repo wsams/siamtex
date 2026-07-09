@@ -438,7 +438,10 @@ See [SPECS.md](./SPECS.md) §5 (security requirements) for product-level constra
 
 ## Related docs
 
-- [README.md](./README.md) — project overview for humans
+- [README.md](./README.md) — marketing overview + doc index for humans
+- [docs/user-guide.md](./docs/user-guide.md) — day-to-day scenarios
+- [docs/features.md](./docs/features.md) — feature inventory
+- [docs/roadmap.md](./docs/roadmap.md) — competitive gaps & TODOs
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — code contributions
 - [config/README.md](./config/README.md) — config template index
 - [SPECS.md](./SPECS.md) — full requirements

@@ -368,8 +368,10 @@ Logs: `journalctl -u php8.3-fpm`, `/var/log/apache2/siamtex-error.log`, in-app *
 
 ## Related
 
+- [README.md](./README.md) — product overview and documentation index
 - [AGENTS.md](./AGENTS.md) — full agent-oriented install runbook (any Linux host)
 - [docs/ai-providers.md](./docs/ai-providers.md) — OpenAI, Gemini, Grok, OpenRouter, Ollama
 - [docs/tailscale-ollama.md](./docs/tailscale-ollama.md) — ACL examples, security notes
+- [docs/roadmap.md](./docs/roadmap.md) — competitive gaps and planned work
 - [config/README.md](./config/README.md) — config template index
 - [SPECS.md](./SPECS.md) — product requirements and security model
