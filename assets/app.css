@@ -759,7 +759,7 @@ body.pane-dragging * { cursor: inherit !important; }
 .editor-pref-vim span,
 .editor-pref-spell span { color: var(--text); font-weight: 500; }
 #editorHost .cm-spell-error {
-  text-decoration: underline wavy #e85d5d;
+  text-decoration: underline wavy var(--bad);
   text-decoration-skip-ink: none;
 }
 .spell-suggest-menu {
@@ -772,8 +772,8 @@ body.pane-dragging * { cursor: inherit !important; }
   padding: 4px;
   border-radius: 8px;
   border: 1px solid var(--line);
-  background: var(--panel, #1e1e24);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  background: var(--card);
+  box-shadow: var(--shadow);
   display: flex;
   flex-direction: column;
   gap: 2px;
