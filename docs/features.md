@@ -7,6 +7,7 @@ Detailed inventory of what ships today. For a short pitch, see the [README](../R
 ## Editor & compile
 
 - Multi-file projects with a syntax-highlighted **CodeMirror** editor
+- **Native spell check** (offline Hunspell/`Typo.js`) — wavy underlines in prose, right-click suggestions; skips LaTeX commands and math; toggle with **Spell** in the editor bar
 - Beginner **Insert menus** — bold, italic, headings, links, lists, colors, math, tables, images, resume snippets; wraps the current selection
 - Side-by-side **PDF preview** with debounced auto-compile and explicit Compile
 - Structured **compile diagnostics** (file, line, severity) with click-to-jump; raw build log still available

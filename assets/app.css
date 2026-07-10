@@ -754,8 +754,60 @@ body.pane-dragging * { cursor: inherit !important; }
   color: var(--text);
   max-width: 150px;
 }
-.editor-pref-vim input { margin: 0; accent-color: var(--accent); }
-.editor-pref-vim span { color: var(--text); font-weight: 500; }
+.editor-pref-vim input,
+.editor-pref-spell input { margin: 0; accent-color: var(--accent); }
+.editor-pref-vim span,
+.editor-pref-spell span { color: var(--text); font-weight: 500; }
+#editorHost .cm-spell-error {
+  text-decoration: underline wavy var(--bad);
+  text-decoration-skip-ink: none;
+}
+.spell-suggest-menu {
+  position: fixed;
+  z-index: 10050;
+  min-width: 160px;
+  max-width: 240px;
+  max-height: min(50vh, 280px);
+  overflow: auto;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.spell-suggest-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.spell-suggest-item:hover,
+.spell-suggest-item:focus {
+  background: rgba(255, 255, 255, 0.08);
+  outline: none;
+}
+.spell-suggest-ignore {
+  margin-top: 2px;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 6px 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.spell-suggest-empty {
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
 #editorHost {
   flex: 1;
   min-height: 280px;

@@ -1,0 +1,7 @@
+Typo.js (https://github.com/cfinke/Typo.js)
+Copyright (c) Christopher Finke
+Licensed under the BSD 3-Clause License.
+See https://github.com/cfinke/Typo.js for the full license text.
+
+Hunspell en_US dictionary files shipped alongside Typo.js are used for
+client-side spell checking in the SiamTeX editor.

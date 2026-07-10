@@ -49,6 +49,8 @@ $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/siamte
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/keymap/vim.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.9/purify.min.js"></script>
+  <script src="<?= htmlspecialchars($base, ENT_QUOTES) ?>/assets/spell/typo.js"></script>
+  <script src="<?= htmlspecialchars($base, ENT_QUOTES) ?>/assets/spell/spellcheck.js"></script>
   <script src="<?= htmlspecialchars($base, ENT_QUOTES) ?>/assets/app.js"></script>
 </body>
 </html>
