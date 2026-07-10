@@ -51,6 +51,9 @@
     chatBusy: false,
     chatAbort: null,
     chatMentionIdx: -1,
+    bibCache: null,
+    bibSearch: '',
+    bibActivePath: '',
   };
 
   const $main = () => document.getElementById('main');
@@ -1921,6 +1924,10 @@
       label: 'Table',
     },
     footnote: { wrap: ['\\footnote{', '}'], label: 'Footnote' },
+    cite: { wrap: ['\\citep{', '}'], label: 'Cite (citep)', citePicker: true },
+    citet: { wrap: ['\\citet{', '}'], label: 'Cite textual (citet)', citePicker: true },
+    citep: { wrap: ['\\citep{', '}'], label: 'Cite parenthetical (citep)', citePicker: true },
+    nocite: { wrap: ['\\nocite{', '}'], label: 'No-cite (*)', citePicker: true },
     comment: { wrap: ['% ', ''], label: 'Comment' },
     resumeSection: { wrap: ['\\section{', '}'], label: 'Resume section' },
     resumeJob: {
@@ -1950,6 +1957,10 @@
     }
     const snip = SNIPPETS[key];
     if (!snip) return;
+    if (snip.citePicker) {
+      openCitePicker(key).catch((e) => toast(e.message || 'Could not open citations', 'error'));
+      return;
+    }
     const doc = ed.getDoc();
     const selected = doc.getSelection();
 
@@ -1965,6 +1976,27 @@
     } else if (snip.block) {
       const cur = doc.getCursor();
       doc.replaceRange(snip.block, cur);
+    }
+    ed.focus();
+    markDirtyFromEditor();
+    scheduleAutoCompile();
+  }
+
+  function insertCitationCommand(cmd, key) {
+    const ed = state.editor;
+    if (!ed || ed.getOption('readOnly')) {
+      toast('Editor is read-only', 'error');
+      return;
+    }
+    const left = '\\' + cmd + '{';
+    const right = '}';
+    const doc = ed.getDoc();
+    const selected = doc.getSelection();
+    if (selected && !/[{}\\]/.test(selected)) {
+      doc.replaceSelection(left + selected + right);
+    } else {
+      const cur = doc.getCursor();
+      doc.replaceRange(left + key + right, cur);
     }
     ed.focus();
     markDirtyFromEditor();
@@ -1991,6 +2023,11 @@
       id: 'resume',
       label: 'Resume',
       items: ['resumeHeader', 'resumeSection', 'resumeJob', 'resumeSkill', 'geometry', 'fontsize10'],
+    },
+    {
+      id: 'cite',
+      label: 'Cite',
+      items: ['cite', 'citet', 'citep', 'nocite'],
     },
     {
       id: 'insert',
@@ -3316,6 +3353,7 @@
           ${hasAiChat() ? '<button type="button" id="btnAiPanel" class="primary ai-sparkle-btn" title="AI — chat, quick edits, apply to editor">✦ AI</button>' : ''}
           <button type="button" id="btnExport">Export</button>
           ${p.role === 'owner' ? '<button type="button" id="btnShare">Share</button>' : ''}
+          <button type="button" id="btnBibliography" title="Bibliography — add entries, search, insert citations">Bibliography</button>
           <button type="button" id="btnCatalogWs" title="Browse templates, macros, and packages">Catalog</button>
           <button type="button" id="btnTools">Tools</button>
           <button type="button" id="btnHistory" title="Version history">History</button>
@@ -3381,6 +3419,9 @@
       location.href = BASE + '/api/export.php?id=' + encodeURIComponent(p.id);
     };
     document.getElementById('btnShare')?.addEventListener('click', shareProject);
+    document.getElementById('btnBibliography')?.addEventListener('click', () => {
+      showBibliography().catch((e) => toast(e.message || 'Could not open bibliography', 'error'));
+    });
     document.getElementById('btnTools').onclick = showTools;
     document.getElementById('btnCatalogWs')?.addEventListener('click', () => {
       showCatalog().catch((e) => toast(e.message || 'Could not open catalog', 'error'));
@@ -3800,6 +3841,7 @@
     }
     const diags = state.build?.diagnostics || [];
     const errors = diags.filter((d) => d.severity === 'error');
+    const missingCites = diags.filter((d) => d.category === 'citation' || /^Missing citation:/i.test(d.message || ''));
     const canFix = canEditProject(state.project) && aiCan('fixErrors') && errors.length > 0;
     if (!diags.length) {
       if (state.build?.status === 'error' || state.build?.status === 'ok_with_warnings') {
@@ -3812,19 +3854,41 @@
       body.innerHTML = '<div class="pill">No problems from the last build. Click Compile when you are ready.</div>';
       return;
     }
+    const citeBar = missingCites.length
+      ? `<div class="problems-actions problems-cite-bar">
+          <span class="pill sev-warning">${missingCites.length} missing citation${missingCites.length === 1 ? '' : 's'}</span>
+          <button type="button" id="btnOpenBibFromProblems" class="ghost">Open bibliography</button>
+        </div>`
+      : '';
     const fixBar = canFix
       ? `<div class="problems-actions"><button type="button" id="btnAiFixProblems" class="primary">AI fix problems</button><span class="pill">${errors.length} error${errors.length === 1 ? '' : 's'}</span></div>`
       : '';
-    body.innerHTML = fixBar + diags.map((d, i) => `
-      <div class="diag" data-i="${i}">
-        <span class="diag-sev sev-${esc(d.severity)}">${esc(d.severity)}</span>
+    body.innerHTML = citeBar + fixBar + diags.map((d, i) => {
+      const isCite = d.category === 'citation' || /^Missing citation:/i.test(d.message || '');
+      const citeKey = d.citationKey || (isCite ? String(d.message || '').replace(/^Missing citation:\s*/i, '').trim() : '');
+      return `
+      <div class="diag${isCite ? ' diag-citation' : ''}" data-i="${i}"${citeKey ? ` data-cite-key="${esc(citeKey)}"` : ''}>
+        <span class="diag-sev sev-${esc(isCite ? 'warning' : d.severity)}">${esc(isCite ? 'citation' : d.severity)}</span>
         <span class="diag-msg">${esc(d.message || '(no message)')}</span>
-        <span class="diag-loc">${esc(diagLocation(d))}</span>
-      </div>`).join('');
+        <span class="diag-loc">${esc(diagLocation(d))}${citeKey ? ' · add in Bibliography' : ''}</span>
+      </div>`;
+    }).join('');
     document.getElementById('btnAiFixProblems')?.addEventListener('click', () => showAiFixProblems(errors));
+    document.getElementById('btnOpenBibFromProblems')?.addEventListener('click', () => {
+      const firstKey = missingCites[0]?.citationKey
+        || String(missingCites[0]?.message || '').replace(/^Missing citation:\s*/i, '').trim();
+      showBibliography({ highlightKey: firstKey || '', addKey: firstKey || '' })
+        .catch((e) => toast(e.message || 'Could not open bibliography', 'error'));
+    });
     body.querySelectorAll('.diag').forEach((el) => {
       el.onclick = async () => {
         const d = diags[Number(el.getAttribute('data-i'))];
+        const citeKey = el.getAttribute('data-cite-key') || d.citationKey || '';
+        if (citeKey && (d.category === 'citation' || /^Missing citation:/i.test(d.message || ''))) {
+          showBibliography({ highlightKey: citeKey, addKey: citeKey })
+            .catch((e) => toast(e.message || 'Could not open bibliography', 'error'));
+          return;
+        }
         const file = d.file && !String(d.file).includes('texmf') && !String(d.file).includes('texlive')
           ? d.file
           : state.project.mainFile;
@@ -4103,7 +4167,7 @@
         if (pick === '__custom') {
           path = (backdrop.querySelector('#afPath').value || '').trim();
           if (!path) throw new Error('Enter a file path.');
-          content = path.endsWith('.bib') ? '% Bibliography\n' : '% ' + path + '\n';
+          content = path.endsWith('.bib') ? '' : '% ' + path + '\n';
         } else {
           const preset = state.commonFiles.find((f) => f.id === pick);
           if (!preset) throw new Error('Unknown file type.');
@@ -4647,6 +4711,443 @@ ${body}\\end{document}
 
     backdrop.querySelector('#aiSetClose').onclick = () => backdrop.remove();
     backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.remove(); });
+  }
+
+  function bibFilesFromState() {
+    return (state.files || [])
+      .filter((f) => !f.binary && /\.bib$/i.test(f.path || ''))
+      .map((f) => f.path)
+      .sort();
+  }
+
+  function bibEntryLabel(entry) {
+    const f = entry.fields || {};
+    const title = f.title || f.booktitle || '';
+    const author = f.author || f.editor || '';
+    const year = f.year || '';
+    const bits = [author, title, year].filter(Boolean);
+    return bits.length ? bits.join(' — ') : '(no fields)';
+  }
+
+  function filterBibEntries(entries, q) {
+    const needle = String(q || '').trim().toLowerCase();
+    if (!needle) return entries;
+    return entries.filter((e) => {
+      const hay = [
+        e.key,
+        e.type,
+        e.path,
+        ...Object.values(e.fields || {}),
+      ].join(' ').toLowerCase();
+      return hay.includes(needle);
+    });
+  }
+
+  async function loadBibliographyIndex(path) {
+    if (!state.project?.id) throw new Error('Open a project first.');
+    let q = '/api/bibliography.php?id=' + encodeURIComponent(state.project.id);
+    if (path) q += '&path=' + encodeURIComponent(path);
+    if (state.shareToken) q += '&token=' + encodeURIComponent(state.shareToken);
+    const data = await api(q);
+    state.bibCache = data;
+    return data;
+  }
+
+  async function ensureBibFile(preferredPath) {
+    let bibs = bibFilesFromState();
+    if (preferredPath && bibs.includes(preferredPath)) return preferredPath;
+    if (bibs.includes('refs.bib')) return 'refs.bib';
+    if (bibs.length) return bibs[0];
+    if (!canEditProject(state.project)) {
+      throw new Error('This project has no .bib file yet.');
+    }
+    const path = preferredPath || 'refs.bib';
+    const meta = await api('/api/files.php?id=' + encodeURIComponent(state.project.id), {
+      method: 'PUT',
+      json: { path, content: '', source: 'import' },
+    });
+    state.files.push({
+      path: meta.file.path,
+      size: meta.file.size,
+      updatedAt: new Date().toISOString(),
+      binary: !!meta.file.binary,
+    });
+    state.contents[path] = '';
+    toast('Created ' + path, 'ok');
+    return path;
+  }
+
+  function bibFormFieldsHtml(entry) {
+    const f = entry?.fields || {};
+    const rows = [
+      ['author', 'Author(s)', f.author || ''],
+      ['title', 'Title', f.title || ''],
+      ['journal', 'Journal / booktitle', f.journal || f.booktitle || ''],
+      ['year', 'Year', f.year || ''],
+      ['volume', 'Volume', f.volume || ''],
+      ['pages', 'Pages', f.pages || ''],
+      ['doi', 'DOI', f.doi || ''],
+      ['url', 'URL', f.url || ''],
+    ];
+    return rows.map(([name, label, val]) => `
+      <label>${esc(label)}
+        <input type="text" data-bib-field="${esc(name)}" value="${esc(val)}" />
+      </label>`).join('');
+  }
+
+  async function showBibliography(opts = {}) {
+    if (!state.project) {
+      toast('Open a project first', 'error');
+      return;
+    }
+    const canEdit = canEditProject(state.project);
+    let activePath = opts.path || state.bibActivePath || '';
+    try {
+      activePath = await ensureBibFile(activePath || undefined);
+    } catch (e) {
+      toast(e.message || 'No bibliography file', 'error');
+      return;
+    }
+    state.bibActivePath = activePath;
+    state.bibSearch = opts.search != null ? opts.search : (state.bibSearch || '');
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal modal-wide modal-bib">
+        <h2>Bibliography</h2>
+        <p class="bib-lead">Search entries, add or edit BibTeX records, and insert <code>\\citep{…}</code> at the cursor.</p>
+        <div class="bib-toolbar">
+          <label class="bib-file-label">File
+            <select id="bibFileSelect"></select>
+          </label>
+          <label class="bib-search-label grow">Search
+            <input id="bibSearch" type="search" placeholder="key, author, title…" value="${esc(state.bibSearch)}" />
+          </label>
+          ${canEdit ? '<button type="button" id="bibAdd" class="primary">Add entry</button>' : ''}
+        </div>
+        <div id="bibMissing" class="bib-missing hidden"></div>
+        <div id="bibList" class="bib-list"></div>
+        <div id="bibEditor" class="bib-editor hidden"></div>
+        <div class="modal-actions">
+          <button type="button" id="bibOpenRaw" class="ghost">Edit raw .bib</button>
+          <button type="button" id="bibClose">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(backdrop);
+
+    const close = () => backdrop.remove();
+    backdrop.querySelector('#bibClose').onclick = close;
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+
+    const fileSelect = backdrop.querySelector('#bibFileSelect');
+    const listEl = backdrop.querySelector('#bibList');
+    const editorEl = backdrop.querySelector('#bibEditor');
+    const missingEl = backdrop.querySelector('#bibMissing');
+    const searchEl = backdrop.querySelector('#bibSearch');
+
+    let entries = [];
+    let editingKey = null;
+
+    function refreshFileSelect(bibFiles) {
+      const files = bibFiles.length ? bibFiles : [activePath];
+      fileSelect.innerHTML = files.map((p) =>
+        `<option value="${esc(p)}"${p === activePath ? ' selected' : ''}>${esc(p)}</option>`).join('');
+    }
+
+    function showMissingBanner() {
+      const diags = state.build?.diagnostics || [];
+      const missing = [];
+      const seen = new Set();
+      for (const d of diags) {
+        const key = d.citationKey
+          || ((d.category === 'citation' || /^Missing citation:/i.test(d.message || ''))
+            ? String(d.message || '').replace(/^Missing citation:\s*/i, '').trim()
+            : '');
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        missing.push(key);
+      }
+      if (!missing.length) {
+        missingEl.classList.add('hidden');
+        missingEl.innerHTML = '';
+        return;
+      }
+      missingEl.classList.remove('hidden');
+      missingEl.innerHTML = `
+        <strong>Missing from last compile</strong>
+        <div class="bib-missing-keys">
+          ${missing.map((k) => `<button type="button" class="bib-missing-key" data-key="${esc(k)}">${esc(k)}</button>`).join('')}
+        </div>`;
+      missingEl.querySelectorAll('.bib-missing-key').forEach((btn) => {
+        btn.onclick = () => {
+          const k = btn.getAttribute('data-key') || '';
+          searchEl.value = k;
+          state.bibSearch = k;
+          renderList();
+          if (canEdit) openEditor({ type: 'article', key: k, fields: {} }, true);
+        };
+      });
+    }
+
+    function renderList() {
+      const q = searchEl.value;
+      state.bibSearch = q;
+      const filtered = filterBibEntries(entries, q);
+      if (!filtered.length) {
+        listEl.innerHTML = `<div class="pill">${entries.length ? 'No entries match your search.' : 'No bibliography entries yet. Click Add entry.'}</div>`;
+        return;
+      }
+      listEl.innerHTML = filtered.map((e) => `
+        <div class="bib-entry${opts.highlightKey && e.key === opts.highlightKey ? ' bib-entry-hl' : ''}" data-key="${esc(e.key)}">
+          <div class="bib-entry-main">
+            <code class="bib-key">${esc(e.key)}</code>
+            <span class="bib-type">${esc(e.type)}</span>
+            <span class="bib-meta">${esc(bibEntryLabel(e))}</span>
+          </div>
+          <div class="bib-entry-actions">
+            <button type="button" class="ghost bib-cite" data-key="${esc(e.key)}" title="Insert \\citep{${esc(e.key)}}">Cite</button>
+            ${canEdit ? `<button type="button" class="ghost bib-edit" data-key="${esc(e.key)}">Edit</button>` : ''}
+            ${canEdit ? `<button type="button" class="ghost danger bib-del" data-key="${esc(e.key)}">Delete</button>` : ''}
+          </div>
+        </div>`).join('');
+
+      listEl.querySelectorAll('.bib-cite').forEach((btn) => {
+        btn.onclick = (ev) => {
+          ev.stopPropagation();
+          insertCitationCommand('citep', btn.getAttribute('data-key') || '');
+          toast('Inserted citation', 'ok');
+        };
+      });
+      listEl.querySelectorAll('.bib-edit').forEach((btn) => {
+        btn.onclick = (ev) => {
+          ev.stopPropagation();
+          const key = btn.getAttribute('data-key');
+          const entry = entries.find((x) => x.key === key);
+          if (entry) openEditor(entry, false);
+        };
+      });
+      listEl.querySelectorAll('.bib-del').forEach((btn) => {
+        btn.onclick = async (ev) => {
+          ev.stopPropagation();
+          const key = btn.getAttribute('data-key');
+          if (!key || !confirm('Delete bibliography entry ' + key + '?')) return;
+          try {
+            const res = await api('/api/bibliography.php?id=' + encodeURIComponent(state.project.id), {
+              method: 'DELETE',
+              json: { id: state.project.id, path: activePath, key },
+            });
+            state.contents[activePath] = res.content;
+            if (state.activePath === activePath && state.editor) {
+              state.editor.setValue(res.content);
+              state.dirty[activePath] = false;
+            }
+            const fi = state.files.find((f) => f.path === activePath);
+            if (fi && res.file) {
+              fi.size = res.file.size;
+              fi.updatedAt = res.file.updatedAt || fi.updatedAt;
+            }
+            await refresh();
+            toast('Deleted ' + key, 'ok');
+          } catch (err) {
+            toast(err.message || 'Delete failed', 'error');
+          }
+        };
+      });
+    }
+
+    function openEditor(entry, isNew) {
+      editingKey = isNew ? null : entry.key;
+      const journalVal = entry.fields?.journal || entry.fields?.booktitle || '';
+      editorEl.classList.remove('hidden');
+      editorEl.innerHTML = `
+        <h3>${isNew ? 'Add entry' : 'Edit entry'}</h3>
+        <div class="bib-form">
+          <label>Type
+            <select id="bibType">
+              ${['article', 'book', 'inproceedings', 'incollection', 'phdthesis', 'mastersthesis', 'techreport', 'misc', 'unpublished']
+                .map((t) => `<option value="${t}"${(entry.type || 'article') === t ? ' selected' : ''}>${t}</option>`).join('')}
+            </select>
+          </label>
+          <label>Citation key
+            <input id="bibKey" type="text" value="${esc(entry.key || '')}" placeholder="smith2024" ${isNew ? '' : 'readonly'} />
+          </label>
+          ${bibFormFieldsHtml(entry)}
+        </div>
+        <div class="modal-actions bib-form-actions">
+          <button type="button" id="bibSave" class="primary">Save entry</button>
+          <button type="button" id="bibCancelEdit" class="ghost">Cancel</button>
+        </div>`;
+      // Prefer journal field name in form; map booktitle for non-article on save
+      const journalInput = editorEl.querySelector('[data-bib-field="journal"]');
+      if (journalInput) journalInput.value = journalVal;
+
+      editorEl.querySelector('#bibCancelEdit').onclick = () => {
+        editorEl.classList.add('hidden');
+        editorEl.innerHTML = '';
+        editingKey = null;
+      };
+      editorEl.querySelector('#bibSave').onclick = async () => {
+        const type = editorEl.querySelector('#bibType').value;
+        const key = (editorEl.querySelector('#bibKey').value || '').trim();
+        if (!key) {
+          toast('Citation key is required', 'error');
+          return;
+        }
+        const fields = {};
+        editorEl.querySelectorAll('[data-bib-field]').forEach((inp) => {
+          const name = inp.getAttribute('data-bib-field');
+          const val = (inp.value || '').trim();
+          if (!val) return;
+          if (name === 'journal' && (type === 'inproceedings' || type === 'incollection' || type === 'book')) {
+            fields.booktitle = val;
+          } else {
+            fields[name] = val;
+          }
+        });
+        try {
+          const res = await api('/api/bibliography.php?id=' + encodeURIComponent(state.project.id), {
+            method: 'POST',
+            json: {
+              id: state.project.id,
+              path: activePath,
+              entry: { type, key, fields },
+            },
+          });
+          state.contents[activePath] = res.content;
+          if (state.activePath === activePath && state.editor) {
+            state.editor.setValue(res.content);
+            state.dirty[activePath] = false;
+          }
+          const fi = state.files.find((f) => f.path === activePath);
+          if (fi && res.file) {
+            fi.size = res.file.size;
+            fi.updatedAt = res.file.updatedAt || fi.updatedAt;
+          }
+          if (!state.files.some((f) => f.path === activePath) && res.file) {
+            state.files.push({
+              path: res.file.path,
+              size: res.file.size,
+              updatedAt: res.file.updatedAt || new Date().toISOString(),
+              binary: false,
+            });
+          }
+          editorEl.classList.add('hidden');
+          editorEl.innerHTML = '';
+          editingKey = null;
+          opts.highlightKey = key;
+          await refresh();
+          toast((isNew ? 'Added ' : 'Updated ') + key, 'ok');
+          renderFileList();
+        } catch (err) {
+          toast(err.message || 'Save failed', 'error');
+        }
+      };
+      editorEl.scrollIntoView({ block: 'nearest' });
+    }
+
+    async function refresh() {
+      const data = await loadBibliographyIndex(activePath);
+      refreshFileSelect(data.bibFiles?.length ? data.bibFiles : bibFilesFromState());
+      entries = (data.entries || []).map((e) => ({ ...e, path: e.path || activePath }));
+      showMissingBanner();
+      renderList();
+      if (opts.addKey && canEdit) {
+        const exists = entries.some((e) => e.key === opts.addKey);
+        if (!exists) {
+          openEditor({ type: 'article', key: opts.addKey, fields: {} }, true);
+        } else {
+          const hit = entries.find((e) => e.key === opts.addKey);
+          if (hit) openEditor(hit, false);
+        }
+        opts.addKey = '';
+      }
+    }
+
+    fileSelect.onchange = async () => {
+      activePath = fileSelect.value;
+      state.bibActivePath = activePath;
+      editorEl.classList.add('hidden');
+      await refresh();
+    };
+    searchEl.oninput = () => renderList();
+    backdrop.querySelector('#bibAdd')?.addEventListener('click', () => {
+      openEditor({ type: 'article', key: '', fields: {} }, true);
+    });
+    backdrop.querySelector('#bibOpenRaw').onclick = async () => {
+      close();
+      await loadFile(activePath);
+    };
+
+    await refresh();
+  }
+
+  async function openCitePicker(snippetKey) {
+    const snip = SNIPPETS[snippetKey];
+    const cmd = (snip?.wrap?.[0] || '\\citep{').replace(/^\\/, '').replace(/\{$/, '') || 'citep';
+    let activePath = state.bibActivePath || '';
+    try {
+      activePath = await ensureBibFile(activePath || undefined);
+    } catch (e) {
+      toast(e.message || 'No bibliography file', 'error');
+      return;
+    }
+    state.bibActivePath = activePath;
+    const data = await loadBibliographyIndex(activePath);
+    const entries = data.entries || [];
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal modal-wide modal-bib">
+        <h2>Insert citation</h2>
+        <p class="bib-lead">Pick a key to insert <code>\\${esc(cmd)}{…}</code> at the cursor.</p>
+        <label class="grow">Search
+          <input id="citeSearch" type="search" placeholder="key, author, title…" autofocus />
+        </label>
+        <div id="citeList" class="bib-list"></div>
+        <div class="modal-actions">
+          <button type="button" id="citeManage" class="ghost">Manage bibliography</button>
+          <button type="button" id="citeClose">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(backdrop);
+    const close = () => backdrop.remove();
+    backdrop.querySelector('#citeClose').onclick = close;
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+    backdrop.querySelector('#citeManage').onclick = () => {
+      close();
+      showBibliography().catch((e) => toast(e.message || 'Could not open bibliography', 'error'));
+    };
+
+    const listEl = backdrop.querySelector('#citeList');
+    const searchEl = backdrop.querySelector('#citeSearch');
+
+    function render() {
+      const filtered = filterBibEntries(entries, searchEl.value);
+      if (!filtered.length) {
+        listEl.innerHTML = `<div class="pill">${entries.length ? 'No matches.' : 'No entries yet — open Bibliography to add one.'}</div>`;
+        return;
+      }
+      listEl.innerHTML = filtered.map((e) => `
+        <button type="button" class="bib-entry bib-entry-pick" data-key="${esc(e.key)}">
+          <div class="bib-entry-main">
+            <code class="bib-key">${esc(e.key)}</code>
+            <span class="bib-type">${esc(e.type)}</span>
+            <span class="bib-meta">${esc(bibEntryLabel(e))}</span>
+          </div>
+        </button>`).join('');
+      listEl.querySelectorAll('.bib-entry-pick').forEach((btn) => {
+        btn.onclick = () => {
+          insertCitationCommand(cmd, btn.getAttribute('data-key') || '');
+          close();
+          toast('Inserted citation', 'ok');
+        };
+      });
+    }
+    searchEl.oninput = render;
+    render();
+    searchEl.focus();
   }
 
   function showTools() {

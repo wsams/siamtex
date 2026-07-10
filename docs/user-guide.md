@@ -70,6 +70,18 @@ Every catalog item shows its **license**. First-party templates and macros are M
 
 ---
 
+## Bibliography & citations
+
+| Scenario | What happens |
+|---|---|
+| Open Bibliography | Toolbar **Bibliography** lists entries from project `.bib` files (creates `refs.bib` if needed). |
+| Add or edit an entry | Fill type, citation key, author, title, year, and related fields; SiamTeX writes valid BibTeX. |
+| Search | Filter by key, author, title, or any field text. |
+| Insert a citation | Use **Cite** in the Insert menus, or **Cite** on an entry — inserts `\citep{key}` (or `\citet` / `\nocite`) at the cursor. |
+| Missing citations | After compile, undefined keys appear in Problems; click one to open Bibliography and add the entry. |
+
+---
+
 ## Image workflow
 
 | Scenario | What happens |

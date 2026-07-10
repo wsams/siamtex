@@ -1,0 +1,17 @@
+# Monthly Let's Encrypt renewal with a temporary UFW opening for port 80.
+# Certbot only renews certificates within 30 days of expiry.
+#
+# Domains on this server:
+#   wsams.org, atom.builders (+ www), chat.wsams.org (+ XMPP subdomains)
+#
+# Install:
+#   install -m 644 config/cron-certbot-firewall.example /etc/cron.d/certbot-firewall
+#
+# Disable the default certbot timer (it cannot open UFW):
+#   systemctl disable --now certbot.timer
+
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# 03:17 UTC on the 1st of each month
+17 3 1 * * root /usr/local/sbin/certbot-renew-firewall.sh >> /var/log/certbot-renew-firewall.log 2>&1

@@ -8,9 +8,10 @@ Detailed inventory of what ships today. For a short pitch, see the [README](../R
 
 - Multi-file projects with a syntax-highlighted **CodeMirror** editor
 - **Native spell check** (offline Hunspell/`Typo.js`) — wavy underlines in prose, right-click suggestions; skips LaTeX commands and math; toggle with **Spell** in the editor bar
-- Beginner **Insert menus** — bold, italic, headings, links, lists, colors, math, tables, images, resume snippets; wraps the current selection
+- Beginner **Insert menus** — bold, italic, headings, links, lists, colors, math, tables, images, citations, resume snippets; wraps the current selection
+- **Smart bibliography UI** — add/edit/search BibTeX entries, insert `\citep` / `\citet` at the cursor, surface missing citation keys from the build log
 - Side-by-side **PDF preview** with debounced auto-compile and explicit Compile
-- Structured **compile diagnostics** (file, line, severity) with click-to-jump; raw build log still available
+- Structured **compile diagnostics** (file, line, severity) with click-to-jump; missing citations highlighted; raw build log still available
 - **Multiple compile entries** — each top-level `.tex` builds its own encrypted PDF; preview follows the active file
 - Sandboxed **Docker TeX worker** — `pdflatex`, `xelatex`, `lualatex`, BibTeX, Biber via `latexmk` (no host TeX install)
 
@@ -76,10 +77,10 @@ Setup: [ai-providers.md](./ai-providers.md) · architecture: [AI.md](../AI.md).
 | Students | Researchers & professionals |
 |----------|------------------------------|
 | Homework / lab report / handout templates with editable starter text | Multi-file article & book projects with `refs.bib` and natbib |
-| Toolbar / Insert menus — no memorizing `\begin{}` | Side-by-side PDF with auto-compile |
-| Multiple PDFs (e.g. resume + cover letter) | Import/export zip, share links, page estimates, geometry |
-| Clickable compile errors | Branching version history with diff-before-restore |
-| AI fix problems when the build breaks | AES-256-GCM encryption at rest |
+| Toolbar / Insert menus — no memorizing `\begin{}` | Bibliography panel: search entries, insert citations |
+| Multiple PDFs (e.g. resume + cover letter) | Side-by-side PDF with auto-compile; click missing-citation warnings to add keys |
+| Clickable compile errors | Import/export zip, share links, page estimates, geometry |
+| AI fix problems when the build breaks | Branching version history with diff-before-restore; AES-256-GCM at rest |
 
 ---
 

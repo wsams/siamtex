@@ -108,24 +108,24 @@
   }
 
   function createOverlay() {
+    // CodeMirror 5 forbids overlays with startState ("Overlays may not be stateful").
+    // Keep TeX-aware parsing with line-local state reset on stream.sol().
+    let lineState = null;
+
+    function resetLineState() {
+      lineState = {
+        inMath: false,
+        mathKind: null, // '$' | '$$' | '\\(' | '\\['
+        skipDepth: 0,
+        skipCmd: null,
+      };
+    }
+
     return {
-      startState() {
-        return {
-          inMath: false,
-          mathKind: null, // '$' | '$$' | '\\(' | '\\['
-          skipDepth: 0,
-          skipCmd: null,
-        };
-      },
-      copyState(s) {
-        return {
-          inMath: s.inMath,
-          mathKind: s.mathKind,
-          skipDepth: s.skipDepth,
-          skipCmd: s.skipCmd,
-        };
-      },
-      token(stream, state) {
+      token(stream) {
+        if (stream.sol() || !lineState) resetLineState();
+        const state = lineState;
+
         // Line comment
         if (stream.peek() === '%' && !state.inMath) {
           stream.skipToEnd();
@@ -261,16 +261,12 @@
     return { word, from: { line: pos.line, ch: start }, to: { line: pos.line, ch: end } };
   }
 
-  function tokenIsSpellError(cm, pos) {
-    const tok = cm.getTokenTypeAt(pos);
-    return !!(tok && tok.split(/\s+/).includes('spell-error'));
-  }
-
   function hideMenu() {
     const el = document.getElementById('siamtexSpellMenu');
     if (el) el.remove();
     document.removeEventListener('click', hideMenu, true);
     document.removeEventListener('keydown', onMenuKey, true);
+    document.removeEventListener('contextmenu', hideMenu, true);
   }
 
   function onMenuKey(e) {
@@ -330,17 +326,19 @@
     setTimeout(() => {
       document.addEventListener('click', hideMenu, true);
       document.addEventListener('keydown', onMenuKey, true);
+      document.addEventListener('contextmenu', hideMenu, true);
     }, 0);
   }
 
   function onContextMenu(cm, evt) {
+    if (!evt.target?.closest?.('.CodeMirror')) return;
     const pos = cm.coordsChar({ left: evt.clientX, top: evt.clientY }, 'window');
     const hit = wordAt(cm, pos);
+    // getTokenTypeAt() strips overlay styles, so rely on the dictionary (and
+    // optional DOM underline) rather than CodeMirror token types.
     if (!hit || isWordOk(hit.word)) return;
-    const probeCh = hit.from.ch + Math.max(0, Math.floor((hit.to.ch - hit.from.ch) / 2));
-    const probe = { line: hit.from.line, ch: probeCh };
-    if (!tokenIsSpellError(cm, probe) && !tokenIsSpellError(cm, hit.from)) return;
     evt.preventDefault();
+    evt.stopPropagation();
     showSuggestionMenu(cm, evt, hit);
   }
 
@@ -363,7 +361,7 @@
       try { cm.removeOverlay(st.overlay); } catch { /* */ }
     }
     if (st.onContext) {
-      cm.getWrapperElement()?.removeEventListener('contextmenu', st.onContext);
+      try { cm.off('contextmenu', st.onContext); } catch { /* */ }
     }
     if (cm.state) delete cm.state._siamtexSpell;
   }
@@ -373,11 +371,16 @@
     detach(cm);
     return ensureDictionary(appBase).then(() => {
       const overlay = createOverlay();
-      const onContext = (evt) => onContextMenu(cm, evt);
+      // CodeMirror signal: handler(cm, event)
+      const onContext = (_editor, evt) => onContextMenu(cm, evt);
       cm.state = cm.state || {};
       cm.state._siamtexSpell = { overlay, onContext };
       cm.addOverlay(overlay);
-      cm.getWrapperElement()?.addEventListener('contextmenu', onContext);
+      if (typeof cm.on === 'function') {
+        cm.on('contextmenu', onContext);
+      } else {
+        cm.getWrapperElement()?.addEventListener('contextmenu', (evt) => onContextMenu(cm, evt));
+      }
       return true;
     });
   }
