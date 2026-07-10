@@ -35,6 +35,13 @@ final class LogParser
                 $currentFile = $fileStack ? end($fileStack) : null;
             }
 
+            // Missing / undefined citations (natbib, biblatex, classic LaTeX, BibTeX)
+            $citeDiag = self::parseCitationDiagnostic($line, $currentFile);
+            if ($citeDiag !== null) {
+                $diags[] = $citeDiag;
+                continue;
+            }
+
             if (preg_match('/^!\\s*(.+)$/', $line, $m)) {
                 $msg = $m[1];
                 $lineNo = null;
@@ -73,7 +80,23 @@ final class LogParser
                 continue;
             }
 
-            if (preg_match('/^(?:LaTeX|Package|Class)\\s+([^\\s]+)\\s+Warning:\\s*(.+)$/i', $line, $m)) {
+            // Classic: "LaTeX Warning: ..."
+            if (preg_match('/^LaTeX Warning:\\s*(.+)$/i', $line, $m)) {
+                $msg = $m[1];
+                $lineNo = null;
+                if (preg_match('/on input line (\\d+)/i', $line, $lm)) {
+                    $lineNo = (int) $lm[1];
+                }
+                $diags[] = [
+                    'severity' => 'warning',
+                    'file' => $currentFile ?: null,
+                    'line' => $lineNo,
+                    'message' => rtrim($msg, '.'),
+                ];
+                continue;
+            }
+
+            if (preg_match('/^(?:Package|Class)\\s+([^\\s]+)\\s+Warning:\\s*(.+)$/i', $line, $m)) {
                 $msg = $m[1] . ': ' . $m[2];
                 $lineNo = null;
                 if (preg_match('/on input line (\\d+)/i', $line, $lm)) {
@@ -111,6 +134,60 @@ final class LogParser
             $out[] = $d;
         }
         return $out;
+    }
+
+    /**
+     * @return array{severity:string,file:?string,line:?int,message:string,category?:string,citationKey?:string}|null
+     */
+    private static function parseCitationDiagnostic(string $line, ?string $currentFile): ?array
+    {
+        $lineNo = null;
+        if (preg_match('/on input line (\\d+)/i', $line, $lm)) {
+            $lineNo = (int) $lm[1];
+        }
+
+        // LaTeX / natbib: Citation `key' on page N undefined ...
+        if (preg_match('/Citation\\s+[`\']([^`\']+)[`\'].*undefined/i', $line, $m)) {
+            $key = $m[1];
+            return [
+                'severity' => 'warning',
+                'file' => $currentFile ?: null,
+                'line' => $lineNo,
+                'message' => 'Missing citation: ' . $key,
+                'category' => 'citation',
+                'citationKey' => $key,
+            ];
+        }
+
+        // BibTeX: Warning--I didn't find a database entry for "key"
+        if (preg_match('/didn\'t find a database entry for\\s+[\"\']([^\"\']+)[\"\']/i', $line, $m)
+            || preg_match('/I didn\'t find a database entry for\\s+[\"\']([^\"\']+)[\"\']/i', $line, $m)) {
+            $key = $m[1];
+            return [
+                'severity' => 'warning',
+                'file' => $currentFile ?: null,
+                'line' => $lineNo,
+                'message' => 'Missing citation: ' . $key,
+                'category' => 'citation',
+                'citationKey' => $key,
+            ];
+        }
+
+        // biblatex: entry could not be found / Empty bibliography
+        if (preg_match('/entry\\s+[\'`]([^\'`]+)[\'`].*could not be found/i', $line, $m)
+            || preg_match('/The following entry could not be found:\\s*(\\S+)/i', $line, $m)) {
+            $key = $m[1];
+            return [
+                'severity' => 'warning',
+                'file' => $currentFile ?: null,
+                'line' => $lineNo,
+                'message' => 'Missing citation: ' . $key,
+                'category' => 'citation',
+                'citationKey' => $key,
+            ];
+        }
+
+        return null;
     }
 
     private static function normalizeFile(string $f): string
