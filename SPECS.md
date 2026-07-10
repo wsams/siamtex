@@ -90,6 +90,7 @@ Rebuild SiamTeX as a beautiful, responsive, security-first LaTeX IDE in the brow
 | F-40 | Projects may include **extra TeX (and related) files** as needed (e.g., chapters, styles, images, `.bib`, `.cls`, `.sty`). |
 | F-41 | Users can **import files into a project**. |
 | F-41a | Users can **upload** assets (images, PDF, text) into a project via the Add file dialog; binary assets are stored encrypted and materialized at compile time. |
+| F-41b | Users can **import Word `.docx`** via Add file: text and embedded figures are extracted from the OOXML package without executing macros; images are saved as project files under `figures/` (downloadable, available at compile time); optional AI conversion proposes LaTeX with **review-before-accept**; size limits apply (see env `SIAMTEX_MAX_DOCX_*`). |
 | F-42 | Users can **export and share projects** (downloadable archive and/or share links with access control). |
 | F-43 | Clear project model: designated **main file** (default compile entry when no top-level `.tex` is active), auxiliary partials/assets, bibliography sources, build settings, and optional **multiple PDF outputs** per top-level entry (see F-35–F-36). |
 

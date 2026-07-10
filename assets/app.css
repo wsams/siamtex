@@ -371,6 +371,10 @@ button.ghost { background: transparent; }
   background: rgba(56, 189, 248, 0.06);
 }
 .upload-box p { margin: 6px 0 10px; color: var(--muted); font-size: 0.9rem; }
+.upload-box-docx { border-color: rgba(52, 211, 153, 0.4); background: rgba(52, 211, 153, 0.06); }
+.docx-warn { margin: 6px 0 8px; padding-left: 1.2em; color: var(--muted); font-size: 0.85rem; }
+.docx-figs { margin: 6px 0 10px; padding-left: 1.2em; font-size: 0.9rem; }
+.docx-figs code { font-size: 0.85em; }
 .upload-pick { display: inline-block; margin: 4px 0; cursor: pointer; }
 .upload-pick input[type="file"] {
   position: absolute;

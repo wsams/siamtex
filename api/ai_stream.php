@@ -101,6 +101,61 @@ try {
         exit;
     }
 
+    if ($mode === 'import_docx') {
+        $documents = is_array($body['documents'] ?? null) ? $body['documents'] : [];
+        $normalized = [];
+        foreach ($documents as $doc) {
+            if (!is_array($doc)) {
+                continue;
+            }
+            $text = (string) ($doc['text'] ?? '');
+            $figures = [];
+            if (is_array($doc['figures'] ?? null)) {
+                foreach ($doc['figures'] as $fp) {
+                    $fp = trim((string) $fp);
+                    if ($fp !== '' && !str_contains($fp, '..')) {
+                        $figures[] = $fp;
+                    }
+                }
+            }
+            if ($text === '' && $figures === []) {
+                continue;
+            }
+            $normalized[] = [
+                'filename' => basename((string) ($doc['filename'] ?? 'document.docx')),
+                'text' => $text !== '' ? $text : '(figures only)',
+                'figures' => $figures,
+            ];
+        }
+        if ($normalized === []) {
+            stx_sse_send('error', ['error' => 'documents with extracted text or figures are required']);
+            exit;
+        }
+        $goal = (string) ($body['goal'] ?? 'fill');
+        $result = $ai->importDocumentsStream(
+            $user,
+            $projectId,
+            $normalized,
+            $instruction,
+            $goal,
+            static fn (string $message) => stx_sse_send('status', ['message' => $message]),
+            $sendUsage,
+            $sendDelta,
+            $abort,
+        );
+        stx_sse_send('done', [
+            'mode' => 'import_docx',
+            'result' => [
+                'summary' => $result['summary'],
+                'files' => $result['files'],
+                'notes' => $result['notes'],
+            ],
+            'usage' => $result['usage'],
+            'usageTotals' => $result['usageTotals'],
+        ]);
+        exit;
+    }
+
     if ($mode === 'fix_problems') {
         $entry = trim((string) ($body['entry'] ?? ''));
         $result = $ai->fixProblemsStream(

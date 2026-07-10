@@ -4,9 +4,11 @@
 ;   sudo cp config/php-uploads-siamtex.ini.example /etc/php/8.3/fpm/conf.d/99-siamtex-uploads.ini
 ;   sudo systemctl restart php8.3-fpm
 ;
-; SiamTeX allows up to SIAMTEX_MAX_UPLOAD_BYTES (default 5 MB) per file in app logic.
-; PHP limits must be at least that high or uploads fail with no file received.
+; App defaults: SIAMTEX_MAX_UPLOAD_BYTES ≈ 10 MB per asset;
+; DOCX import allows up to SIAMTEX_MAX_DOCX_BYTES (default 50 MB).
+; PHP limits must be at least that high or large Word imports fail.
 
-upload_max_filesize = 12M
-post_max_size = 16M
+upload_max_filesize = 64M
+post_max_size = 72M
 max_file_uploads = 40
+memory_limit = 256M

@@ -590,6 +590,105 @@ final class AiService
     }
 
     /**
+     * Propose LaTeX file updates from extracted document text (review-before-accept).
+     *
+     * @param list<array{filename:string, text:string, figures?:list<string>}> $documents
+     * @return array{summary:string, files:array<string, string>, notes:list<string>, usage:array, usageTotals:array}
+     */
+    public function importDocumentsStream(
+        array $user,
+        string $projectId,
+        array $documents,
+        string $instruction,
+        string $goal,
+        callable $onStatus,
+        callable $onUsage,
+        ?callable $onDelta = null,
+        ?callable $shouldAbort = null,
+    ): array {
+        $this->requireAi($user, AiPermissions::ASSIST);
+        if ($documents === []) {
+            throw new RuntimeException('No document text to import.');
+        }
+        $project = $this->projects->requireRole($user, $projectId, ['owner', 'edit']);
+        $config = $this->configForProject((int) $user['id'], $projectId);
+        $config->validate();
+        $this->assertRateLimit((int) $user['id']);
+
+        $onStatus('Collecting project files…');
+        $files = [];
+        $budget = Config::aiMaxContextChars();
+        foreach ($this->projects->listFiles($projectId) as $meta) {
+            $p = (string) $meta['path'];
+            if (!preg_match('/\.(tex|bib|sty|cls)$/i', $p)) {
+                continue;
+            }
+            $text = $this->projects->readFile($project, $p);
+            if (strlen($text) > $budget) {
+                throw new RuntimeException('Project is too large for AI context. Edit one file at a time.');
+            }
+            $files[$p] = $text;
+            $budget -= strlen($text);
+        }
+
+        $docBudget = min(500000, Config::aiMaxContextChars());
+        $normalized = [];
+        foreach ($documents as $doc) {
+            $filename = basename((string) ($doc['filename'] ?? 'document.docx'));
+            $text = (string) ($doc['text'] ?? '');
+            $figures = [];
+            if (is_array($doc['figures'] ?? null)) {
+                foreach ($doc['figures'] as $fp) {
+                    $fp = trim((string) $fp);
+                    if ($fp !== '' && !str_contains($fp, '..')) {
+                        $figures[] = $fp;
+                    }
+                }
+            }
+            if ($text === '' && $figures === []) {
+                continue;
+            }
+            if (strlen($text) > $docBudget) {
+                $text = substr($text, 0, $docBudget);
+            }
+            $docBudget -= strlen($text);
+            $normalized[] = [
+                'filename' => $filename,
+                'text' => $text !== '' ? $text : '(figures only)',
+                'figures' => $figures,
+            ];
+            if ($docBudget < 1000) {
+                break;
+            }
+        }
+        if ($normalized === []) {
+            throw new RuntimeException('No readable document text to import.');
+        }
+
+        $goal = in_array($goal, ['fill', 'replace', 'merge', 'new'], true) ? $goal : 'fill';
+        $messages = PromptBuilder::importDocuments(
+            $files,
+            $normalized,
+            $instruction,
+            (string) $project['engine'],
+            $goal,
+        );
+        $onStatus('Waiting for model — converting imported text to LaTeX…');
+        $chat = $this->client->chatWithProgress(
+            $config,
+            $messages,
+            static function (AiUsage $u) use ($onUsage): void {
+                $onUsage($u);
+            },
+            $shouldAbort,
+            $onDelta,
+        );
+        $meta = $this->finalizeUsage((int) $user['id'], 'import_docx', $projectId, $chat->usage);
+
+        return array_merge(AiResponseParser::parseMultiFileJson($chat->content, $chat->finishReason), $meta);
+    }
+
+    /**
      * @return array{project: array, summary:string, files:array<string, string>, notes:list<string>, usage:array, usageTotals:array}
      */
     public function createProjectStream(

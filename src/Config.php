@@ -197,6 +197,65 @@ final class Config
         return (int) (getenv('SIAMTEX_MAX_UPLOAD_BYTES') ?: (10 * 1024 * 1024));
     }
 
+    /**
+     * Max size for a single Word/DOCX import upload (default 50 MB).
+     * Not capped by maxUploadBytes() — DOCX with figures is often larger than a single asset.
+     */
+    public static function maxDocxImportBytes(): int
+    {
+        $n = (int) (getenv('SIAMTEX_MAX_DOCX_BYTES') ?: (50 * 1024 * 1024));
+        if ($n < 1024 * 1024) {
+            $n = 50 * 1024 * 1024;
+        }
+        return min($n, 200 * 1024 * 1024);
+    }
+
+    /**
+     * Max characters of extracted DOCX text kept for preview / AI context (default 500k).
+     */
+    public static function maxDocxExtractChars(): int
+    {
+        $n = (int) (getenv('SIAMTEX_MAX_DOCX_EXTRACT_CHARS') ?: '500000');
+        return $n > 5000 ? $n : 500000;
+    }
+
+    /**
+     * Max DOCX files per import request (default 5).
+     */
+    public static function maxDocxImportFiles(): int
+    {
+        $n = (int) (getenv('SIAMTEX_MAX_DOCX_FILES') ?: '5');
+        return $n > 0 ? min($n, 10) : 5;
+    }
+
+    /** Max images/figures extracted from one DOCX (default 40). */
+    public static function maxDocxMediaFiles(): int
+    {
+        $n = (int) (getenv('SIAMTEX_MAX_DOCX_MEDIA_FILES') ?: '40');
+        return $n > 0 ? min($n, 100) : 40;
+    }
+
+    /** Max bytes per extracted image (default 15 MB). */
+    public static function maxDocxMediaBytes(): int
+    {
+        $n = (int) (getenv('SIAMTEX_MAX_DOCX_MEDIA_BYTES') ?: (15 * 1024 * 1024));
+        return $n > 64 * 1024 ? min($n, 50 * 1024 * 1024) : 15 * 1024 * 1024;
+    }
+
+    /** Max total bytes of all extracted images from one DOCX (default 80 MB). */
+    public static function maxDocxMediaTotalBytes(): int
+    {
+        $n = (int) (getenv('SIAMTEX_MAX_DOCX_MEDIA_TOTAL_BYTES') ?: (80 * 1024 * 1024));
+        return $n > 1024 * 1024 ? min($n, 200 * 1024 * 1024) : 80 * 1024 * 1024;
+    }
+
+    /** Max bytes for a single OOXML XML part (document.xml etc., default 32 MB). */
+    public static function maxDocxXmlPartBytes(): int
+    {
+        $n = (int) (getenv('SIAMTEX_MAX_DOCX_XML_PART_BYTES') ?: (32 * 1024 * 1024));
+        return $n > 1024 * 1024 ? min($n, 64 * 1024 * 1024) : 32 * 1024 * 1024;
+    }
+
     public static function artifactRetentionDays(): int
     {
         return (int) (getenv('SIAMTEX_ARTIFACT_RETENTION_DAYS') ?: '7');
