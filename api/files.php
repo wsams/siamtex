@@ -38,12 +38,46 @@ try {
             if ($meta === null) {
                 stx_json(['error' => 'File not found.'], 404);
             }
+            $asDownload = isset($_GET['download']) && $_GET['download'] !== '' && $_GET['download'] !== '0';
+            if ($asDownload) {
+                $bytes = stx_projects()->readFile($p, $path);
+                $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+                $ctype = match ($ext) {
+                    'png' => 'image/png',
+                    'jpg', 'jpeg' => 'image/jpeg',
+                    'gif' => 'image/gif',
+                    'webp' => 'image/webp',
+                    'bmp' => 'image/bmp',
+                    'tif', 'tiff' => 'image/tiff',
+                    'ico' => 'image/x-icon',
+                    'svg', 'svgz' => 'image/svg+xml',
+                    'pdf' => 'application/pdf',
+                    'eps', 'ps' => 'application/postscript',
+                    'otf' => 'font/otf',
+                    'ttf' => 'font/ttf',
+                    'woff' => 'font/woff',
+                    'woff2' => 'font/woff2',
+                    default => 'application/octet-stream',
+                };
+                $basename = basename($path);
+                header('Content-Type: ' . $ctype);
+                header('Content-Length: ' . (string) strlen($bytes));
+                header('Content-Disposition: attachment; filename="' . str_replace('"', '', $basename) . '"');
+                header('X-Content-Type-Options: nosniff');
+                header('Cache-Control: private, no-store');
+                echo $bytes;
+                exit;
+            }
             // Binary assets are not returned as UTF-8 editor text.
             stx_json([
                 'path' => $path,
                 'binary' => true,
                 'size' => $meta['size'],
                 'content' => null,
+                'downloadUrl' => 'files.php?id=' . rawurlencode($id)
+                    . '&path=' . rawurlencode($path)
+                    . '&download=1'
+                    . ($token !== '' ? '&token=' . rawurlencode($token) : ''),
             ]);
         }
         $content = stx_projects()->readFile($p, $path);

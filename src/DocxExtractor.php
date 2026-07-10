@@ -12,9 +12,9 @@ use RuntimeException;
 use ZipArchive;
 
 /**
- * Safe OOXML (.docx) text extraction.
+ * Safe OOXML (.docx) text + media extraction.
  *
- * Opens the package as a ZIP and reads WordprocessingML XML only.
+ * Opens the package as a ZIP and reads WordprocessingML XML / word/media only.
  * Does not load, execute, or interpret VBA macros, OLE objects, or ActiveX.
  */
 final class DocxExtractor
@@ -39,6 +39,16 @@ final class DocxExtractor
         'word/macrosheets/',
     ];
 
+    /** Image extensions we store as project assets and can reference from LaTeX. */
+    private const MEDIA_EXTENSIONS = [
+        'png', 'jpg', 'jpeg', 'gif', 'bmp', 'tif', 'tiff', 'webp', 'svg', 'pdf', 'eps',
+    ];
+
+    /** Common in Word but not usable by pdflatex graphicx without conversion. */
+    private const SKIP_MEDIA_EXTENSIONS = [
+        'emf', 'wmf', 'emz', 'wmz',
+    ];
+
     /**
      * @return array{
      *   text: string,
@@ -46,10 +56,12 @@ final class DocxExtractor
      *   truncated: bool,
      *   warnings: list<string>,
      *   hasMacros: bool,
-     *   parts: list<string>
+     *   parts: list<string>,
+     *   media: list<array{path:string, bytes:int, content:string, contentType:string, source:string}>,
+     *   figures: list<string>
      * }
      */
-    public static function extractFromPath(string $path, ?int $maxChars = null): array
+    public static function extractFromPath(string $path, ?int $maxChars = null, string $mediaPrefix = 'figures'): array
     {
         if (!is_file($path) || !is_readable($path)) {
             throw new RuntimeException('Could not read the uploaded document.');
@@ -61,6 +73,10 @@ final class DocxExtractor
         $limit = $maxChars ?? Config::maxDocxExtractChars();
         if ($limit < 1000) {
             $limit = 1000;
+        }
+        $mediaPrefix = trim(str_replace('\\', '/', $mediaPrefix), '/');
+        if ($mediaPrefix === '' || str_contains($mediaPrefix, '..')) {
+            $mediaPrefix = 'figures';
         }
 
         $fh = fopen($path, 'rb');
@@ -94,6 +110,13 @@ final class DocxExtractor
                 $warnings[] = 'This document contains VBA macros; they were ignored and not executed.';
             }
 
+            $relMap = self::loadImageRelationships($zip, $warnings);
+            $mediaResult = self::extractMedia($zip, $relMap, $mediaPrefix, $warnings);
+            /** @var array<string, string> $rIdToPath */
+            $rIdToPath = $mediaResult['rIdToPath'];
+            /** @var list<array{path:string, bytes:int, content:string, contentType:string, source:string}> $media */
+            $media = $mediaResult['media'];
+
             $chunks = [];
             $usedParts = [];
             foreach (self::TEXT_PARTS as $part) {
@@ -105,12 +128,15 @@ final class DocxExtractor
                 if ($xml === false || $xml === '') {
                     continue;
                 }
-                // Cap per-part XML size to avoid pathological memory use.
-                if (strlen($xml) > 8 * 1024 * 1024) {
+                $maxPart = Config::maxDocxXmlPartBytes();
+                if (strlen($xml) > $maxPart) {
                     $warnings[] = "Skipped oversized part: {$part}";
                     continue;
                 }
-                $text = self::xmlToPlainText($xml);
+                $partRels = $part === 'word/document.xml'
+                    ? $rIdToPath
+                    : self::loadImageRelationshipsForPart($zip, $part, $mediaPrefix, $media, $warnings);
+                $text = self::xmlToPlainText($xml, $partRels);
                 if ($text === '') {
                     continue;
                 }
@@ -118,8 +144,12 @@ final class DocxExtractor
                 $usedParts[] = $part;
             }
 
+            if ($chunks === [] && $media === []) {
+                throw new RuntimeException('No readable text or images found in the document.');
+            }
             if ($chunks === []) {
-                throw new RuntimeException('No readable text found in the document.');
+                $chunks[] = '(Document contained images but no extractable text.)';
+                $warnings[] = 'No body text found; imported figures only.';
             }
 
             $joined = implode("\n\n", $chunks);
@@ -131,6 +161,11 @@ final class DocxExtractor
                 $warnings[] = "Extracted text truncated to {$limit} characters.";
             }
 
+            $figures = array_values(array_unique(array_map(
+                static fn (array $m): string => $m['path'],
+                $media,
+            )));
+
             return [
                 'text' => $joined,
                 'charCount' => mb_strlen($joined),
@@ -138,6 +173,8 @@ final class DocxExtractor
                 'warnings' => $warnings,
                 'hasMacros' => $hasMacros,
                 'parts' => $usedParts,
+                'media' => $media,
+                'figures' => $figures,
             ];
         } finally {
             $zip->close();
@@ -153,12 +190,18 @@ final class DocxExtractor
      *   warnings: list<string>,
      *   hasMacros: bool,
      *   parts: list<string>,
+     *   media: list<array{path:string, bytes:int, content:string, contentType:string, source:string}>,
+     *   figures: list<string>,
      *   filename: string,
      *   bytes: int
      * }
      */
-    public static function extractFromUpload(array $upload, ?int $maxBytes = null, ?int $maxChars = null): array
-    {
+    public static function extractFromUpload(
+        array $upload,
+        ?int $maxBytes = null,
+        ?int $maxChars = null,
+        string $mediaPrefix = 'figures',
+    ): array {
         $err = (int) ($upload['error'] ?? UPLOAD_ERR_NO_FILE);
         if ($err !== UPLOAD_ERR_OK) {
             throw new RuntimeException(ProjectService::uploadErrorMessage($err));
@@ -184,7 +227,11 @@ final class DocxExtractor
             }
         }
 
-        $result = self::extractFromPath($tmp, $maxChars);
+        $stem = pathinfo(basename($name), PATHINFO_FILENAME);
+        $stem = preg_replace('/[^A-Za-z0-9._-]+/', '_', (string) $stem) ?: 'import';
+        $prefix = trim($mediaPrefix, '/') . '/' . $stem;
+
+        $result = self::extractFromPath($tmp, $maxChars, $prefix);
         $result['filename'] = basename($name);
         $result['bytes'] = $size;
         return $result;
@@ -219,25 +266,51 @@ final class DocxExtractor
     }
 
     /**
-     * Build a minimal article .tex from extracted plain text (no AI).
+     * Build a minimal article .tex from extracted plain text and figure paths (no AI).
+     *
+     * @param list<string> $figures project-relative image paths
      */
-    public static function toBasicLatex(string $plainText, string $title = 'Imported document'): string
-    {
+    public static function toBasicLatex(
+        string $plainText,
+        string $title = 'Imported document',
+        array $figures = [],
+    ): string {
         $safeTitle = self::escapeLatex($title);
         $paras = preg_split("/\n{2,}/", trim($plainText)) ?: [];
         $body = '';
+        $usedFigures = [];
         foreach ($paras as $p) {
             $p = trim($p);
             if ($p === '') {
+                continue;
+            }
+            if (preg_match('/^\[Figure:\s*(.+?)\]$/u', $p, $m)) {
+                $figPath = trim($m[1]);
+                $body .= self::figureLatex($figPath);
+                $usedFigures[$figPath] = true;
                 continue;
             }
             // Single newlines inside a paragraph → spaces; keep as one LaTeX paragraph.
             $line = preg_replace("/\n+/", ' ', $p) ?? $p;
             $body .= self::escapeLatex($line) . "\n\n";
         }
+
+        foreach ($figures as $figPath) {
+            $figPath = (string) $figPath;
+            if ($figPath === '' || isset($usedFigures[$figPath])) {
+                continue;
+            }
+            $body .= self::figureLatex($figPath);
+            $usedFigures[$figPath] = true;
+        }
+
         if ($body === '') {
             $body = "\\textit{(empty document)}\n\n";
         }
+
+        $graphicx = $figures !== [] || str_contains($body, 'includegraphics')
+            ? "\\usepackage{graphicx}\n"
+            : '';
 
         return <<<TEX
 \\documentclass[11pt]{article}
@@ -245,7 +318,7 @@ final class DocxExtractor
 \\usepackage[T1]{fontenc}
 \\usepackage[utf8]{inputenc}
 \\usepackage{lmodern}
-\\usepackage{hyperref}
+{$graphicx}\\usepackage{hyperref}
 
 \\title{{$safeTitle}}
 \\author{}
@@ -256,6 +329,19 @@ final class DocxExtractor
 
 {$body}\\end{document}
 TEX;
+    }
+
+    private static function figureLatex(string $path): string
+    {
+        $path = str_replace('\\', '/', $path);
+        // Paths in \includegraphics should not be LaTeX-escaped the same way as prose;
+        // keep safe characters only (already sanitized on write).
+        $safe = preg_replace('/[^A-Za-z0-9._\\/-]+/', '_', $path) ?? $path;
+        return "\\begin{figure}[ht]\n"
+            . "  \\centering\n"
+            . "  \\includegraphics[width=0.85\\textwidth]{{$safe}}\n"
+            . "  \\caption{}\n"
+            . "\\end{figure}\n\n";
     }
 
     private static function detectMacros(ZipArchive $zip): bool
@@ -275,7 +361,288 @@ TEX;
         return false;
     }
 
-    private static function xmlToPlainText(string $xml): string
+    /**
+     * Map rId → media zip path (word/media/…) from document relationships.
+     *
+     * @param list<string> $warnings
+     * @return array<string, string> rId => zip path under word/
+     */
+    private static function loadImageRelationships(ZipArchive $zip, array &$warnings): array
+    {
+        return self::parseRelsXml(
+            $zip,
+            'word/_rels/document.xml.rels',
+            $warnings,
+        );
+    }
+
+    /**
+     * @param list<array{path:string, bytes:int, content:string, contentType:string, source:string}> $media
+     * @param list<string> $warnings
+     * @return array<string, string>
+     */
+    private static function loadImageRelationshipsForPart(
+        ZipArchive $zip,
+        string $part,
+        string $mediaPrefix,
+        array &$media,
+        array &$warnings,
+    ): array {
+        $base = basename($part);
+        $relsPath = 'word/_rels/' . $base . '.rels';
+        $map = self::parseRelsXml($zip, $relsPath, $warnings);
+        if ($map === []) {
+            return [];
+        }
+
+        // Index already-extracted media by source zip basename.
+        $bySource = [];
+        foreach ($media as $item) {
+            $src = strtolower((string) ($item['source'] ?? ''));
+            if ($src !== '') {
+                $bySource[$src] = (string) $item['path'];
+            }
+        }
+
+        $rIdToPath = [];
+        $needExtract = [];
+        foreach ($map as $rId => $zipPath) {
+            $src = strtolower(basename($zipPath));
+            if (isset($bySource[$src])) {
+                $rIdToPath[$rId] = $bySource[$src];
+                continue;
+            }
+            $needExtract[$rId] = $zipPath;
+        }
+        if ($needExtract === []) {
+            return $rIdToPath;
+        }
+
+        $extra = self::extractMedia($zip, $needExtract, $mediaPrefix, $warnings);
+        foreach ($extra['media'] as $item) {
+            $exists = false;
+            foreach ($media as $existing) {
+                if ($existing['path'] === $item['path']
+                    || strcasecmp((string) ($existing['source'] ?? ''), (string) ($item['source'] ?? '')) === 0
+                ) {
+                    $exists = true;
+                    break;
+                }
+            }
+            if (!$exists) {
+                $media[] = $item;
+                $src = strtolower((string) ($item['source'] ?? ''));
+                if ($src !== '') {
+                    $bySource[$src] = $item['path'];
+                }
+            }
+        }
+        foreach ($extra['rIdToPath'] as $rId => $projectPath) {
+            $rIdToPath[$rId] = $projectPath;
+        }
+        return $rIdToPath;
+    }
+
+    /**
+     * @param list<string> $warnings
+     * @return array<string, string>
+     */
+    private static function parseRelsXml(ZipArchive $zip, string $relsPath, array &$warnings): array
+    {
+        $idx = $zip->locateName($relsPath);
+        if ($idx === false) {
+            return [];
+        }
+        $xml = $zip->getFromIndex($idx);
+        if ($xml === false || $xml === '') {
+            return [];
+        }
+        $prev = libxml_use_internal_errors(true);
+        $dom = new DOMDocument();
+        $ok = $dom->loadXML($xml, LIBXML_NONET | LIBXML_COMPACT);
+        libxml_clear_errors();
+        libxml_use_internal_errors($prev);
+        if (!$ok) {
+            $warnings[] = "Could not parse relationships: {$relsPath}";
+            return [];
+        }
+        $xpath = new DOMXPath($dom);
+        $xpath->registerNamespace('r', 'http://schemas.openxmlformats.org/package/2006/relationships');
+        $nodes = $xpath->query('//r:Relationship');
+        $map = [];
+        if ($nodes === false) {
+            return [];
+        }
+        foreach ($nodes as $node) {
+            if (!$node instanceof DOMElement) {
+                continue;
+            }
+            $id = $node->getAttribute('Id');
+            $type = $node->getAttribute('Type');
+            $target = $node->getAttribute('Target');
+            $mode = $node->getAttribute('TargetMode');
+            if ($id === '' || $target === '') {
+                continue;
+            }
+            if (strcasecmp($mode, 'External') === 0) {
+                $warnings[] = "Skipped external image link ({$id}).";
+                continue;
+            }
+            if (!str_contains(strtolower($type), '/image')) {
+                continue;
+            }
+            $target = str_replace('\\', '/', $target);
+            if (str_contains($target, '..')) {
+                $warnings[] = "Skipped unsafe media path ({$id}).";
+                continue;
+            }
+            // Targets are relative to word/
+            $zipPath = str_starts_with($target, '/')
+                ? ltrim($target, '/')
+                : 'word/' . ltrim($target, '/');
+            // Normalize word/../media → skip
+            if (str_contains($zipPath, '..')) {
+                continue;
+            }
+            $map[$id] = $zipPath;
+        }
+        return $map;
+    }
+
+    /**
+     * @param array<string, string> $relMap rId => zip path
+     * @param list<string> $warnings
+     * @return array{
+     *   media: list<array{path:string, bytes:int, content:string, contentType:string, source:string}>,
+     *   rIdToPath: array<string, string>
+     * }
+     */
+    private static function extractMedia(
+        ZipArchive $zip,
+        array $relMap,
+        string $mediaPrefix,
+        array &$warnings,
+    ): array {
+        $maxImages = Config::maxDocxMediaFiles();
+        $maxEach = Config::maxDocxMediaBytes();
+        $maxTotal = Config::maxDocxMediaTotalBytes();
+        $total = 0;
+        $media = [];
+        $rIdToPath = [];
+        $usedNames = [];
+
+        // Prefer relationship-ordered extraction; also pick up orphan media files.
+        $candidates = [];
+        foreach ($relMap as $rId => $zipPath) {
+            $candidates[] = ['rId' => $rId, 'zipPath' => $zipPath];
+        }
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $name = (string) $zip->getNameIndex($i);
+            if (!str_starts_with(strtolower($name), 'word/media/')) {
+                continue;
+            }
+            $already = false;
+            foreach ($candidates as $c) {
+                if (strcasecmp($c['zipPath'], $name) === 0) {
+                    $already = true;
+                    break;
+                }
+            }
+            if (!$already) {
+                $candidates[] = ['rId' => '', 'zipPath' => $name];
+            }
+        }
+
+        foreach ($candidates as $c) {
+            if (count($media) >= $maxImages) {
+                $warnings[] = "Stopped after {$maxImages} images (limit).";
+                break;
+            }
+            $zipPath = $c['zipPath'];
+            $ext = strtolower(pathinfo($zipPath, PATHINFO_EXTENSION));
+            if (in_array($ext, self::SKIP_MEDIA_EXTENSIONS, true)) {
+                $warnings[] = "Skipped unsupported figure format (.{$ext}): " . basename($zipPath);
+                continue;
+            }
+            if (!in_array($ext, self::MEDIA_EXTENSIONS, true)) {
+                $warnings[] = 'Skipped non-image media: ' . basename($zipPath);
+                continue;
+            }
+            $idx = $zip->locateName($zipPath);
+            if ($idx === false) {
+                // Case-insensitive search
+                $idx = $zip->locateName($zipPath, ZipArchive::FL_NOCASE);
+            }
+            if ($idx === false) {
+                $warnings[] = 'Missing media part: ' . basename($zipPath);
+                continue;
+            }
+            $stat = $zip->statIndex($idx);
+            $rawSize = is_array($stat) ? (int) ($stat['size'] ?? 0) : 0;
+            if ($rawSize > $maxEach) {
+                $warnings[] = 'Skipped oversized image ' . basename($zipPath) . " ({$rawSize} bytes).";
+                continue;
+            }
+            if ($total + $rawSize > $maxTotal) {
+                $warnings[] = 'Reached total media size limit; remaining images skipped.';
+                break;
+            }
+            $bin = $zip->getFromIndex($idx);
+            if ($bin === false || $bin === '') {
+                continue;
+            }
+            if (strlen($bin) > $maxEach) {
+                $warnings[] = 'Skipped oversized image ' . basename($zipPath) . '.';
+                continue;
+            }
+
+            $base = strtolower(pathinfo($zipPath, PATHINFO_FILENAME));
+            $base = preg_replace('/[^a-z0-9._-]+/', '_', $base) ?: 'image';
+            $destName = $base . '.' . ($ext === 'jpeg' ? 'jpg' : $ext);
+            $n = 2;
+            while (isset($usedNames[$destName])) {
+                $destName = $base . '-' . $n . '.' . ($ext === 'jpeg' ? 'jpg' : $ext);
+                $n++;
+            }
+            $usedNames[$destName] = true;
+            $projectPath = $mediaPrefix . '/' . $destName;
+
+            $media[] = [
+                'path' => $projectPath,
+                'bytes' => strlen($bin),
+                'content' => $bin,
+                'contentType' => self::contentTypeForExt($ext),
+                'source' => basename($zipPath),
+            ];
+            $total += strlen($bin);
+            if ($c['rId'] !== '') {
+                $rIdToPath[$c['rId']] = $projectPath;
+            }
+        }
+
+        return ['media' => $media, 'rIdToPath' => $rIdToPath];
+    }
+
+    private static function contentTypeForExt(string $ext): string
+    {
+        return match (strtolower($ext)) {
+            'png' => 'image/png',
+            'jpg', 'jpeg' => 'image/jpeg',
+            'gif' => 'image/gif',
+            'bmp' => 'image/bmp',
+            'tif', 'tiff' => 'image/tiff',
+            'webp' => 'image/webp',
+            'svg' => 'image/svg+xml',
+            'pdf' => 'application/pdf',
+            'eps' => 'application/postscript',
+            default => 'application/octet-stream',
+        };
+    }
+
+    /**
+     * @param array<string, string> $rIdToPath
+     */
+    private static function xmlToPlainText(string $xml, array $rIdToPath = []): string
     {
         $prev = libxml_use_internal_errors(true);
         $dom = new DOMDocument();
@@ -288,10 +655,12 @@ TEX;
 
         $xpath = new DOMXPath($dom);
         $xpath->registerNamespace('w', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main');
+        $xpath->registerNamespace('a', 'http://schemas.openxmlformats.org/drawingml/2006/main');
+        $xpath->registerNamespace('r', 'http://schemas.openxmlformats.org/officeDocument/2006/relationships');
+        $xpath->registerNamespace('v', 'urn:schemas-microsoft-com:vml');
 
         $paragraphs = $xpath->query('//w:p');
         if ($paragraphs === false || $paragraphs->length === 0) {
-            // Fallback: all w:t nodes
             return self::collectTextNodes($xpath->query('//w:t'));
         }
 
@@ -301,8 +670,12 @@ TEX;
                 continue;
             }
             $line = self::paragraphText($p, $xpath);
+            $figs = self::paragraphFigures($p, $xpath, $rIdToPath);
             if ($line !== '') {
                 $lines[] = $line;
+            }
+            foreach ($figs as $figPath) {
+                $lines[] = '[Figure: ' . $figPath . ']';
             }
         }
         // Separate Word paragraphs with a blank line so importers can split on \n\n.
@@ -330,6 +703,60 @@ TEX;
             }
         }
         return trim(implode('', $parts));
+    }
+
+    /**
+     * @param array<string, string> $rIdToPath
+     * @return list<string>
+     */
+    private static function paragraphFigures(DOMElement $p, DOMXPath $xpath, array $rIdToPath): array
+    {
+        if ($rIdToPath === []) {
+            return [];
+        }
+        $out = [];
+        $seen = [];
+        // DrawingML blips
+        $blips = $xpath->query('.//a:blip[@r:embed]', $p);
+        if ($blips !== false) {
+            foreach ($blips as $blip) {
+                if (!$blip instanceof DOMElement) {
+                    continue;
+                }
+                $rId = $blip->getAttributeNS(
+                    'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+                    'embed',
+                );
+                if ($rId === '') {
+                    $rId = $blip->getAttribute('r:embed');
+                }
+                if ($rId !== '' && isset($rIdToPath[$rId]) && !isset($seen[$rId])) {
+                    $out[] = $rIdToPath[$rId];
+                    $seen[$rId] = true;
+                }
+            }
+        }
+        // VML imagedata (older Word)
+        $vml = $xpath->query('.//v:imagedata[@r:id]', $p);
+        if ($vml !== false) {
+            foreach ($vml as $img) {
+                if (!$img instanceof DOMElement) {
+                    continue;
+                }
+                $rId = $img->getAttributeNS(
+                    'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+                    'id',
+                );
+                if ($rId === '') {
+                    $rId = $img->getAttribute('r:id');
+                }
+                if ($rId !== '' && isset($rIdToPath[$rId]) && !isset($seen[$rId])) {
+                    $out[] = $rIdToPath[$rId];
+                    $seen[$rId] = true;
+                }
+            }
+        }
+        return $out;
     }
 
     /** @param \DOMNodeList<DOMNode>|false $nodes */

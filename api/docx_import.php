@@ -8,13 +8,15 @@ use SiamTeX\Config;
 use SiamTeX\DocxExtractor;
 
 /**
- * Extract text from uploaded .docx file(s) without executing macros.
+ * Extract text + figures from uploaded .docx file(s) without executing macros.
  *
  * POST multipart:
  *   - id: project id (required; must have edit access)
  *   - file / files[]: .docx upload(s)
+ *   - saveMedia: "1" (default) to write extracted images into the project under figures/
  *
- * Returns extracted plain text for preview / AI conversion. Does not write project files.
+ * Returns extracted plain text for preview / AI conversion.
+ * When saveMedia is on, image binaries are stored as project files (downloadable / compile-time assets).
  */
 try {
     $user = stx_require_user();
@@ -29,6 +31,12 @@ try {
     }
     // Authz: must be able to edit the project (import proposes writes).
     stx_projects()->requireRole($user, $projectId, ['owner', 'edit']);
+
+    $saveMedia = !isset($_POST['saveMedia']) || !in_array(
+        strtolower(trim((string) $_POST['saveMedia'])),
+        ['0', 'false', 'no', 'off'],
+        true,
+    );
 
     $uploads = [];
     if (!empty($_FILES['files']) && is_array($_FILES['files']['name'] ?? null)) {
@@ -70,9 +78,59 @@ try {
 
     $documents = [];
     $errors = [];
+    $savedMedia = [];
+    $projects = stx_projects();
+
     foreach ($uploads as $i => $upload) {
         try {
-            $documents[] = DocxExtractor::extractFromUpload($upload);
+            $extracted = DocxExtractor::extractFromUpload($upload);
+            $mediaMeta = [];
+            if ($saveMedia) {
+                foreach ($extracted['media'] as $item) {
+                    $path = (string) ($item['path'] ?? '');
+                    $content = (string) ($item['content'] ?? '');
+                    if ($path === '' || $content === '') {
+                        continue;
+                    }
+                    $meta = $projects->writeFile(
+                        $user,
+                        $projectId,
+                        $path,
+                        $content,
+                        'import',
+                        'DOCX figure: ' . basename($path),
+                        false,
+                    );
+                    $savedMedia[] = $meta;
+                    $mediaMeta[] = [
+                        'path' => $meta['path'],
+                        'bytes' => $meta['size'],
+                        'binary' => true,
+                        'contentType' => (string) ($item['contentType'] ?? 'application/octet-stream'),
+                        'source' => (string) ($item['source'] ?? ''),
+                    ];
+                }
+            } else {
+                foreach ($extracted['media'] as $item) {
+                    $mediaMeta[] = [
+                        'path' => (string) ($item['path'] ?? ''),
+                        'bytes' => (int) ($item['bytes'] ?? 0),
+                        'binary' => true,
+                        'contentType' => (string) ($item['contentType'] ?? 'application/octet-stream'),
+                        'source' => (string) ($item['source'] ?? ''),
+                        'saved' => false,
+                    ];
+                }
+            }
+            // Never send raw binary back to the browser in JSON.
+            unset($extracted['media']);
+            $extracted['media'] = $mediaMeta;
+            $extracted['figures'] = array_values(array_map(
+                static fn (array $m): string => (string) $m['path'],
+                $mediaMeta,
+            ));
+            $extracted['mediaSaved'] = $saveMedia;
+            $documents[] = $extracted;
         } catch (Throwable $e) {
             $name = (string) ($upload['name'] ?? ('file#' . $i));
             $errors[] = ['filename' => basename($name), 'error' => $e->getMessage()];
@@ -86,11 +144,15 @@ try {
 
     stx_json([
         'documents' => $documents,
+        'savedMedia' => $savedMedia,
         'errors' => $errors,
         'limits' => [
             'maxBytes' => Config::maxDocxImportBytes(),
             'maxChars' => Config::maxDocxExtractChars(),
             'maxFiles' => $maxFiles,
+            'maxMediaFiles' => Config::maxDocxMediaFiles(),
+            'maxMediaBytes' => Config::maxDocxMediaBytes(),
+            'maxMediaTotalBytes' => Config::maxDocxMediaTotalBytes(),
         ],
         'aiAvailable' => stx_ai_permissions()->allows((int) $user['id'], \SiamTeX\AiPermissions::ASSIST)
             || stx_ai_permissions()->allows((int) $user['id'], \SiamTeX\AiPermissions::CHAT),

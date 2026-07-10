@@ -36,7 +36,7 @@ These files are **templates only**. Copy them to your server and edit paths, hos
 | `apache-siamtex.conf.example` | Virtual host, deny sensitive paths |
 | `nginx-siamtex.conf.example` | Server block for PHP-FPM; includes `ai_stream.php` SSE tuning (`fastcgi_buffering off`) |
 | `php-fpm-siamtex.conf.example` | systemd drop-in to load `/etc/siamtex.env` |
-| `php-uploads-siamtex.ini.example` | PHP-FPM `upload_max_filesize` / `post_max_size` (≥ app 5 MB limit) |
+| `php-uploads-siamtex.ini.example` | PHP-FPM `upload_max_filesize` / `post_max_size` (≥ DOCX import default 50 MB) |
 
 ## GitHub OAuth (optional)
 

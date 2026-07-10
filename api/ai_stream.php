@@ -109,16 +109,26 @@ try {
                 continue;
             }
             $text = (string) ($doc['text'] ?? '');
-            if ($text === '') {
+            $figures = [];
+            if (is_array($doc['figures'] ?? null)) {
+                foreach ($doc['figures'] as $fp) {
+                    $fp = trim((string) $fp);
+                    if ($fp !== '' && !str_contains($fp, '..')) {
+                        $figures[] = $fp;
+                    }
+                }
+            }
+            if ($text === '' && $figures === []) {
                 continue;
             }
             $normalized[] = [
                 'filename' => basename((string) ($doc['filename'] ?? 'document.docx')),
-                'text' => $text,
+                'text' => $text !== '' ? $text : '(figures only)',
+                'figures' => $figures,
             ];
         }
         if ($normalized === []) {
-            stx_sse_send('error', ['error' => 'documents with extracted text are required']);
+            stx_sse_send('error', ['error' => 'documents with extracted text or figures are required']);
             exit;
         }
         $goal = (string) ($body['goal'] ?? 'fill');

@@ -194,13 +194,15 @@ If the model returns markdown fences, strip them in PHP before parse.
 | Format | Approach |
 |--------|----------|
 | `.txt`, `.md`, `.tex` | Read as UTF-8 text (size-capped). |
-| `.docx` | `SiamTeX\DocxExtractor` — `ZipArchive` + WordprocessingML text nodes only (no VBA/OLE execution). |
+| `.docx` | `SiamTeX\DocxExtractor` — `ZipArchive` + WordprocessingML text + `word/media` figures (no VBA/OLE execution). Images saved under `figures/`. |
 | `.pdf` (later) | Optional `pdftotext` in a sandbox; lower priority. |
 
 Limits (suggested defaults):
 
-- Max upload **5 MB** per `.docx` (`SIAMTEX_MAX_DOCX_BYTES`), **3 files** per request (`SIAMTEX_MAX_DOCX_FILES`).  
-- Truncate extracted text to **100k characters** (`SIAMTEX_MAX_DOCX_EXTRACT_CHARS`) with a UI warning.  
+- Max upload **50 MB** per `.docx` (`SIAMTEX_MAX_DOCX_BYTES`), **5 files** per request (`SIAMTEX_MAX_DOCX_FILES`).  
+- Truncate extracted text to **500k characters** (`SIAMTEX_MAX_DOCX_EXTRACT_CHARS`) with a UI warning.  
+- Up to **40** images per document (`SIAMTEX_MAX_DOCX_MEDIA_FILES`), **15 MB** each / **80 MB** total.  
+- Raise PHP `upload_max_filesize` / `post_max_size` (see `config/php-uploads-siamtex.ini.example`) so large Word files are accepted.  
 
 Extracted text is sent **only** to the user’s configured provider, not stored longer than needed (optional short-lived cache in encrypted temp, then wipe).
 
@@ -317,8 +319,8 @@ Dependencies (Composer examples):
 
 ### Phase C — Word + polish
 
-- `.docx` extract (OOXML ZIP + `word/document.xml`; macros never executed)
-- Import UI: Add file → Import Word; basic `.tex` save or AI convert with review-before-accept
+- `.docx` extract (OOXML ZIP + `word/document.xml` + `word/media`; macros never executed)
+- Import UI: Add file → Import Word; figures saved as project files; basic `.tex` save or AI convert with review-before-accept
 - Job-description tailor preset  
 - Anthropic adapter + OpenRouter preset buttons  
 

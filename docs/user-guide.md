@@ -14,7 +14,7 @@ Screenshots in `docs/screenshots/` go stale quickly as the UI evolves — prefer
 | Project dashboard | Searchable project list, template starters, AI project creation, import/export zip. |
 | Editor + live PDF | Multi-file editing, Insert menus, compile errors you can click, preview beside source. |
 | Add files & assets | Upload images, bibliographies, and extra `.tex` files without leaving the browser. |
-| Import Word (.docx) | Extract text safely (no macros); save a basic `.tex` or convert with AI and review before accept. |
+| Import Word (.docx) | Extract text and figures safely (no macros); figures saved under `figures/`; save a basic `.tex` or convert with AI and review before accept. |
 
 **Typical first session**
 
@@ -59,7 +59,7 @@ On multi-user hosts, an administrator must enable AI features per account (**AI 
 | Scenario | What happens |
 |---|---|
 | Upload an asset | Add `png`, `jpg`, `pdf`, bibliography, or extra source files to the project. |
-| Import Word | **+ File → Import Word**, extract text, then **Save as basic .tex** or **Convert with AI** (review before accept). |
+| Import Word | **+ File → Import Word**, extract text & figures into `figures/`, then **Save as basic .tex** or **Convert with AI** (review before accept). Download figures from the binary file pane. |
 | Ask AI to place it | Tell AI where to insert the figure; it can use the filename already in the project. |
 | Tweak layout in place | Ask AI to resize, re-center, or restyle the figure without hunting through LaTeX manually. |
 | Rebuild and verify | Compile again and confirm the PDF layout looks right. |

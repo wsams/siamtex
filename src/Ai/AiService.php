@@ -592,7 +592,7 @@ final class AiService
     /**
      * Propose LaTeX file updates from extracted document text (review-before-accept).
      *
-     * @param list<array{filename:string, text:string}> $documents
+     * @param list<array{filename:string, text:string, figures?:list<string>}> $documents
      * @return array{summary:string, files:array<string, string>, notes:list<string>, usage:array, usageTotals:array}
      */
     public function importDocumentsStream(
@@ -631,19 +631,32 @@ final class AiService
             $budget -= strlen($text);
         }
 
-        $docBudget = min(100000, Config::aiMaxContextChars());
+        $docBudget = min(500000, Config::aiMaxContextChars());
         $normalized = [];
         foreach ($documents as $doc) {
             $filename = basename((string) ($doc['filename'] ?? 'document.docx'));
             $text = (string) ($doc['text'] ?? '');
-            if ($text === '') {
+            $figures = [];
+            if (is_array($doc['figures'] ?? null)) {
+                foreach ($doc['figures'] as $fp) {
+                    $fp = trim((string) $fp);
+                    if ($fp !== '' && !str_contains($fp, '..')) {
+                        $figures[] = $fp;
+                    }
+                }
+            }
+            if ($text === '' && $figures === []) {
                 continue;
             }
             if (strlen($text) > $docBudget) {
                 $text = substr($text, 0, $docBudget);
             }
             $docBudget -= strlen($text);
-            $normalized[] = ['filename' => $filename, 'text' => $text];
+            $normalized[] = [
+                'filename' => $filename,
+                'text' => $text !== '' ? $text : '(figures only)',
+                'figures' => $figures,
+            ];
             if ($docBudget < 1000) {
                 break;
             }

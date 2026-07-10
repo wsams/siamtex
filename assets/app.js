@@ -3086,6 +3086,14 @@
     if (pdfOut) pdfOut.innerHTML = renderPdfOutputsHtml();
   }
 
+  function binaryDownloadUrl(path) {
+    if (!state.project?.id || !path) return '';
+    let url = BASE + '/api/files.php?id=' + encodeURIComponent(state.project.id)
+      + '&path=' + encodeURIComponent(path) + '&download=1';
+    if (state.shareToken) url += '&token=' + encodeURIComponent(state.shareToken);
+    return url;
+  }
+
   function showBinaryPane(path, size) {
     const host = document.getElementById('editorHost');
     const label = document.getElementById('editorLabel');
@@ -3096,8 +3104,10 @@
     const canEdit = canEditProject(state.project);
     const isFont = /\.(otf|ttf|ttc|woff2?|pfb|pfm|afm)$/i.test(path);
     const isImage = /\.(png|jpe?g|gif|webp|bmp|tiff?|ico)$/i.test(path);
+    const dlUrl = binaryDownloadUrl(path);
     let help = `<p>This file is stored in your project and available at compile time.
-      ${kb ? '(' + esc(kb) + ')' : ''}</p>`;
+      ${kb ? '(' + esc(kb) + ')' : ''}
+      ${dlUrl ? ` · <a href="${esc(dlUrl)}" download="${esc(path.split('/').pop())}">Download</a>` : ''}</p>`;
     let snippet = path;
     let btnLabel = 'Insert path into editor';
     if (isImage || /\.pdf$/i.test(path)) {
@@ -3567,7 +3577,7 @@
 
         <div class="upload-box upload-box-docx" style="margin-top:12px">
           <strong>Import Word (.docx)</strong>
-          <p>Extract text from a Word document (macros are never executed). Optionally convert to LaTeX with AI — you review before anything is written.</p>
+          <p>Extract text and figures from a Word document (macros are never executed). Images are saved under <code>figures/</code>. Optionally convert to LaTeX with AI — you review before anything is written.</p>
           <div class="modal-actions" style="margin-top:8px">
             <button type="button" id="afDocxImport" class="primary">Import Word…</button>
           </div>
@@ -3727,15 +3737,16 @@
       return;
     }
     const canAi = hasAiAssist();
-    const maxBytes = 5 * 1024 * 1024;
-    const maxFiles = 3;
+    const maxBytes = 50 * 1024 * 1024;
+    const maxFiles = 5;
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop';
     backdrop.innerHTML = `
       <div class="modal modal-wide">
         <h2>Import Word (.docx)</h2>
-        <p class="ai-disclaimer">Text is extracted from the OOXML package only — <strong>macros are never executed</strong>.
-          Max ${formatBytes(maxBytes)} per file, up to ${maxFiles} files. Review every change before accepting.</p>
+        <p class="ai-disclaimer">Text and figures are extracted from the OOXML package — <strong>macros are never executed</strong>.
+          Images are saved under <code>figures/</code> as project files (downloadable, available at compile time).
+          Max ${formatBytes(maxBytes)} per file, up to ${maxFiles} files. Review LaTeX changes before accepting.</p>
         <label class="upload-pick">
           <span class="btn">Choose .docx…</span>
           <input id="docxUpload" type="file" multiple accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
@@ -3757,7 +3768,7 @@
         <div id="docxWaitMount" class="ai-wait-mount hidden"></div>
         <div id="docxAiPreview" class="ai-preview hidden"></div>
         <div class="modal-actions">
-          <button type="button" id="docxExtractBtn" class="primary">Extract text</button>
+          <button type="button" id="docxExtractBtn" class="primary">Extract text &amp; figures</button>
           <button type="button" id="docxBasicBtn" class="hidden">Save as basic .tex</button>
           <button type="button" id="docxAiBtn" class="primary hidden"${canAi ? '' : ' disabled title="AI assist not enabled"'}>Convert with AI…</button>
           <button type="button" id="docxAcceptBtn" class="primary hidden">Accept changes</button>
@@ -3788,6 +3799,31 @@
     const clearErr = () => {
       errEl.classList.add('hidden');
       errEl.textContent = '';
+    };
+
+    const mergeSavedMediaIntoState = (savedMedia) => {
+      const existing = new Set(state.files.map((f) => f.path));
+      for (const meta of savedMedia || []) {
+        if (!meta?.path || existing.has(meta.path)) {
+          // Refresh size if overwritten
+          const hit = state.files.find((f) => f.path === meta.path);
+          if (hit) {
+            hit.size = meta.size ?? hit.size;
+            hit.binary = true;
+            hit.updatedAt = new Date().toISOString();
+          }
+          continue;
+        }
+        state.files.push({
+          path: meta.path,
+          size: meta.size,
+          updatedAt: new Date().toISOString(),
+          binary: true,
+        });
+        state.contents[meta.path] = null;
+        existing.add(meta.path);
+      }
+      renderFileList();
     };
 
     uploadInput.addEventListener('change', () => {
@@ -3833,6 +3869,7 @@
       try {
         const fd = new FormData();
         fd.append('id', state.project.id);
+        fd.append('saveMedia', '1');
         if (list.length === 1) {
           fd.append('file', list[0]);
         } else {
@@ -3853,13 +3890,22 @@
         }
         if (!res.ok) throw new Error(data.error || 'Import failed');
         extracted = data.documents || [];
-        if (!extracted.length) throw new Error('No text extracted.');
+        if (!extracted.length) throw new Error('No text or figures extracted.');
+
+        mergeSavedMediaIntoState(data.savedMedia || []);
 
         extractPrev.classList.remove('hidden');
         extractPrev.innerHTML = extracted.map((d) => {
           const warn = (d.warnings || []).map((w) => `<li>${esc(w)}</li>`).join('');
+          const figs = (d.figures || d.media || []).map((f) => {
+            const path = typeof f === 'string' ? f : f.path;
+            const bytes = typeof f === 'object' && f.bytes ? ` (${formatBytes(f.bytes)})` : '';
+            const dl = binaryDownloadUrl(path);
+            return `<li><code>${esc(path)}</code>${bytes}${dl ? ` · <a href="${esc(dl)}" download>Download</a>` : ''}</li>`;
+          }).join('');
           const snippet = String(d.text || '').slice(0, 2500);
           return `<h4>${esc(d.filename)} — ${d.charCount || 0} chars${d.truncated ? ' (truncated)' : ''}${d.hasMacros ? ' · macros ignored' : ''}</h4>
+            ${figs ? `<p><strong>Figures saved</strong></p><ul class="docx-figs">${figs}</ul>` : '<p class="pill">No figures found</p>'}
             ${warn ? `<ul class="docx-warn">${warn}</ul>` : ''}
             <pre>${esc(snippet)}${(d.text || '').length > 2500 ? '\n…' : ''}</pre>`;
         }).join('');
@@ -3874,13 +3920,18 @@
           aiOpts.classList.add('hidden');
           aiBtn.classList.add('hidden');
         }
-        toast(`Extracted ${extracted.length} document${extracted.length === 1 ? '' : 's'}`, 'ok');
+        const figN = (data.savedMedia || []).length;
+        toast(
+          `Extracted ${extracted.length} document${extracted.length === 1 ? '' : 's'}`
+            + (figN ? `, ${figN} figure${figN === 1 ? '' : 's'} saved` : ''),
+          'ok',
+        );
       } catch (e) {
         showErr(e.message || 'Extract failed');
         toast(e.message || 'Extract failed', 'error');
       } finally {
         extractBtn.disabled = false;
-        extractBtn.textContent = 'Extract text';
+        extractBtn.textContent = 'Extract text & figures';
       }
     };
 
@@ -3899,9 +3950,8 @@
             path = sanitizePath(`${base}-${n}.tex`);
           }
           const title = (doc.filename || 'Imported document').replace(/\.docx$/i, '');
-          // Minimal article: escape via server-side write of client-built body is fine —
-          // we build a simple escaped body here matching DocxExtractor::toBasicLatex intent.
-          const content = buildBasicLatexFromPlain(doc.text || '', title);
+          const figures = (doc.figures || []).map((f) => (typeof f === 'string' ? f : f.path)).filter(Boolean);
+          const content = buildBasicLatexFromPlain(doc.text || '', title, figures);
           const meta = await api('/api/files.php?id=' + encodeURIComponent(state.project.id), {
             method: 'PUT',
             json: { path, content, source: 'import' },
@@ -3933,9 +3983,9 @@
       const wait = createAiWait(waitMount, {
         title: 'AI converting Word import',
         streaming: true,
-        subtitle: 'Model proposes LaTeX files — nothing is written until you Accept.',
+        subtitle: 'Model proposes LaTeX files — figures are already in the project. Nothing is written until you Accept.',
         phases: [
-          'Sending extracted text and project files…',
+          'Sending extracted text, figure paths, and project files…',
           'Model is structuring LaTeX from the document…',
           'Generating file updates — review will appear when ready…',
           'Still working — large documents take longer…',
@@ -3954,6 +4004,7 @@
           documents: extracted.map((d) => ({
             filename: d.filename,
             text: d.text,
+            figures: d.figures || [],
           })),
         }, wait, [aiBtn, extractBtn, basicBtn, acceptBtn, closeBtn]);
         pending = { mode: 'project', result: data.result };
@@ -3994,8 +4045,8 @@
     };
   }
 
-  /** Client-side basic LaTeX from plain text (mirrors DocxExtractor::toBasicLatex escaping). */
-  function buildBasicLatexFromPlain(plainText, title) {
+  /** Client-side basic LaTeX from plain text + figure paths (mirrors DocxExtractor::toBasicLatex). */
+  function buildBasicLatexFromPlain(plainText, title, figures = []) {
     const escTex = (s) => {
       const map = {
         '\\': '\\textbackslash{}',
@@ -4011,21 +4062,41 @@
       };
       return String(s).replace(/[\\{}#$%&_~^]/g, (ch) => map[ch] || ch);
     };
+    const figureBlock = (path) => {
+      const safe = String(path).replace(/[^A-Za-z0-9._/-]+/g, '_');
+      return `\\begin{figure}[ht]\n  \\centering\n  \\includegraphics[width=0.85\\textwidth]{${safe}}\n  \\caption{}\n\\end{figure}\n\n`;
+    };
     const safeTitle = escTex(title || 'Imported document');
     const paras = String(plainText || '').trim().split(/\n{2,}/);
+    const used = new Set();
     let body = '';
     for (const p of paras) {
-      const line = p.trim().replace(/\n+/g, ' ');
+      const line = p.trim();
       if (!line) continue;
-      body += escTex(line) + '\n\n';
+      const figMatch = line.match(/^\[Figure:\s*(.+?)\]$/);
+      if (figMatch) {
+        const fp = figMatch[1].trim();
+        body += figureBlock(fp);
+        used.add(fp);
+        continue;
+      }
+      body += escTex(line.replace(/\n+/g, ' ')) + '\n\n';
+    }
+    for (const fp of figures || []) {
+      if (!fp || used.has(fp)) continue;
+      body += figureBlock(fp);
+      used.add(fp);
     }
     if (!body) body = '\\textit{(empty document)}\n\n';
+    const graphicx = (figures || []).length || body.includes('includegraphics')
+      ? '\\usepackage{graphicx}\n'
+      : '';
     return `\\documentclass[11pt]{article}
 \\usepackage[margin=1in]{geometry}
 \\usepackage[T1]{fontenc}
 \\usepackage[utf8]{inputenc}
 \\usepackage{lmodern}
-\\usepackage{hyperref}
+${graphicx}\\usepackage{hyperref}
 
 \\title{${safeTitle}}
 \\author{}
