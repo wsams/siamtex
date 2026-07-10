@@ -1,0 +1,12 @@
+{
+  "id": "lab-report",
+  "name": "Lab report",
+  "description": "Science lab write-up with abstract, methods, results, and discussion.",
+  "longDescription": "Multi-section lab report package: main.tex plus partials for methods and results, plus a starter bibliography. Uses amsmath, graphicx, and natbib — packages already in the SiamTeX TeX worker.",
+  "category": "school",
+  "tags": ["lab", "science", "report", "homework"],
+  "mainFile": "main.tex",
+  "engine": "pdflatex",
+  "license": "MIT",
+  "licenseNote": "First-party SiamTeX content (MIT)."
+}

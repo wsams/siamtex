@@ -4,5 +4,12 @@
   "description": "Minimal article starter (main.tex).",
   "category": "general",
   "mainFile": "main.tex",
-  "engine": "pdflatex"
+  "engine": "pdflatex",
+  "longDescription": "Minimal article starter with geometry and hyperref. Best when you want a clean slate.",
+  "tags": [
+    "minimal",
+    "article"
+  ],
+  "license": "MIT",
+  "licenseNote": "First-party SiamTeX content (MIT)."
 }

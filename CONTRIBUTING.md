@@ -45,7 +45,7 @@ Run without OAuth for solo mode — leave `SIAMTEX_GITHUB_CLIENT_ID` and `SIAMTE
 
 ## Templates & academic content
 
-Template improvements (homework, article, resume) are welcome. Keep placeholder text generic (“Your Name”, “Paper Title”) and suitable for public distribution.
+Template and catalog improvements (homework, article, resume, lab report, macro packs, package guides) are welcome. Keep placeholder text generic (“Your Name”, “Paper Title”) and suitable for public distribution. New first-party content must be **MIT-licensed** (see `templates/LICENSE`) and declare `license` / `licenseNote` in the manifest. Do not vendor third-party template hosts unless federation is explicitly scoped.
 
 ## Code of conduct
 

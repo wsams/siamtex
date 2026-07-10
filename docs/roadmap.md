@@ -35,7 +35,7 @@ These are uncommon or weak in many hosted LaTeX products:
 | Real-time multi-cursor co-editing | [TODO #1](https://github.com/wsams/siamtex/issues/1) | Often yes | Rare |
 | Share links / roles | Partial ([#2](https://github.com/wsams/siamtex/issues/2), [#3](https://github.com/wsams/siamtex/issues/3), [#4](https://github.com/wsams/siamtex/issues/4)) | Yes | Manual file share |
 | Git / GitHub project sync | [TODO #15](https://github.com/wsams/siamtex/issues/15) | Often yes | External git |
-| Rich template marketplace | First-party only ([#9](https://github.com/wsams/siamtex/issues/9)) | Often large catalogs | CTAN / local |
+| Rich template marketplace | First-party catalog shipped ([#9](https://github.com/wsams/siamtex/issues/9)); federation still out of scope | Often large catalogs | CTAN / local |
 | Smart bibliography UI | [TODO #7](https://github.com/wsams/siamtex/issues/7) | Often yes | Editor-dependent |
 | Native spell check | Yes (offline, TeX-aware) | Often yes | Often yes |
 | Comments / review mode | [TODO #5](https://github.com/wsams/siamtex/issues/5) | Often yes | Rare |
@@ -68,7 +68,7 @@ These are uncommon or weak in many hosted LaTeX products:
 | TODO | Issue |
 |------|--------|
 | Smart bibliography UI (SPECS F-61) | [#7](https://github.com/wsams/siamtex/issues/7) |
-| Expanded templates / macros catalog (F-71) | [#9](https://github.com/wsams/siamtex/issues/9) |
+| Expanded templates / macros catalog (F-71) | Done in [#9](https://github.com/wsams/siamtex/issues/9) — first-party catalog UI + packs; federation deferred |
 | Format converters (F-80) | [#11](https://github.com/wsams/siamtex/issues/11) |
 
 ### Platform & ops

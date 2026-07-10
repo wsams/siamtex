@@ -1,0 +1,12 @@
+{
+  "id": "cover-letter",
+  "name": "Cover letter",
+  "description": "Formal letter for job or school applications (letter class).",
+  "longDescription": "A clean cover-letter starter using the standard letter document class. Edit the addresses and body, then compile as its own PDF — useful alongside a resume project.",
+  "category": "career",
+  "tags": ["letter", "job", "application"],
+  "mainFile": "main.tex",
+  "engine": "pdflatex",
+  "license": "MIT",
+  "licenseNote": "First-party SiamTeX content (MIT)."
+}

@@ -7,8 +7,9 @@ USER root
 
 # Only install packages not already in latest-small.
 # (amssymb/graphicx are not separate tlmgr package names — they ship with amsfonts/graphics.)
+# booktabs: lab-report template and catalog table snippets.
 RUN tlmgr update --self \
-  && tlmgr install titlesec \
+  && tlmgr install titlesec booktabs \
   && tlmgr path add \
   && rm -rf /tmp/texlive* /var/tmp/*
 

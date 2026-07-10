@@ -4,5 +4,13 @@
   "description": "One-page resume package: main.tex plus section partials you can edit.",
   "category": "career",
   "mainFile": "main.tex",
-  "engine": "pdflatex"
+  "engine": "pdflatex",
+  "longDescription": "One-page resume package: main.tex plus section partials (header, summary, skills, experience, education, projects).",
+  "tags": [
+    "resume",
+    "cv",
+    "career"
+  ],
+  "license": "MIT",
+  "licenseNote": "First-party SiamTeX content (MIT)."
 }
