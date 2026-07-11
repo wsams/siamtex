@@ -4,5 +4,13 @@
   "description": "Article package with abstract, sections, and bibliography (main.tex + refs.bib).",
   "category": "academic",
   "mainFile": "main.tex",
-  "engine": "pdflatex"
+  "engine": "pdflatex",
+  "longDescription": "Academic article with abstract, sections, natbib bibliography (main.tex + refs.bib).",
+  "tags": [
+    "paper",
+    "article",
+    "bibliography"
+  ],
+  "license": "MIT",
+  "licenseNote": "First-party SiamTeX content (MIT)."
 }

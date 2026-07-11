@@ -19,7 +19,7 @@ The browser-LaTeX market is crowded. Hosted IDEs, desktop suites, and AI writing
 | **AI without a vendor lock-in** | Ollama at home (e.g. over Tailscale), or OpenAI / Gemini / Grok / OpenRouter — BYOK and admin quotas |
 | **Getting work done** | Live PDF preview, clickable errors, multi-file projects, multiple PDFs per project |
 | **Not losing work** | Branching per-file version history with diff-before-restore |
-| **Starting fast** | Homework, resume, article, and book templates + Insert menus for newcomers |
+| **Starting fast** | Catalog of templates, macros, and package guides + Insert menus for newcomers |
 
 Deep dive: [docs/features.md](./docs/features.md) · walkthroughs: [docs/user-guide.md](./docs/user-guide.md)
 
@@ -59,7 +59,7 @@ Many products offer a browser editor and a PDF preview. Fewer let you **self-hos
 | Comments / review mode | [TODO](https://github.com/wsams/siamtex/issues/5) | Often | Rare |
 | Git / GitHub project sync | [TODO](https://github.com/wsams/siamtex/issues/15) | Often | External git |
 | Word / DOCX import | **Yes** | Sometimes | Converters |
-| Large template marketplace | First-party ([expand](https://github.com/wsams/siamtex/issues/9)) | Often | CTAN |
+| Large template marketplace | First-party catalog ([#9](https://github.com/wsams/siamtex/issues/9)) | Often | CTAN |
 
 Full matrix, rationale, and issue links: **[docs/roadmap.md](./docs/roadmap.md)**.
 

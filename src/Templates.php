@@ -12,20 +12,35 @@ use RuntimeException;
  */
 final class Templates
 {
-    /** @return list<array{id:string,name:string,description:string,category:string,files:list<string>,mainFile:string}> */
+    /**
+     * @return list<array{
+     *   id:string,name:string,description:string,longDescription:string,category:string,
+     *   tags:list<string>,files:list<string>,mainFile:string,engine:string,
+     *   license:string,licenseNote:string
+     * }>
+     */
     public static function catalog(): array
     {
         $out = [];
         foreach (self::packageIds() as $id) {
             $manifest = self::manifest($id);
             $files = array_keys(self::filesFor($id));
+            $tags = $manifest['tags'] ?? [];
+            if (!is_array($tags)) {
+                $tags = [];
+            }
+            $tags = array_values(array_filter(array_map('strval', $tags)));
             $out[] = [
                 'id' => $id,
                 'name' => (string) ($manifest['name'] ?? $id),
                 'description' => (string) ($manifest['description'] ?? ''),
+                'longDescription' => (string) ($manifest['longDescription'] ?? $manifest['description'] ?? ''),
                 'category' => (string) ($manifest['category'] ?? 'general'),
+                'tags' => $tags,
                 'mainFile' => (string) ($manifest['mainFile'] ?? 'main.tex'),
                 'engine' => (string) ($manifest['engine'] ?? 'pdflatex'),
+                'license' => (string) ($manifest['license'] ?? Catalog::LICENSE_ID),
+                'licenseNote' => (string) ($manifest['licenseNote'] ?? Catalog::LICENSE_NOTE),
                 'files' => $files,
             ];
         }
@@ -105,18 +120,20 @@ final class Templates
     }
 
     /**
-     * Common starter files users can add to any project.
+     * Common starter files users can add to any project (includes macro packs).
      *
-     * @return list<array{id:string,path:string,label:string,description:string,content:string}>
+     * @return list<array{id:string,path:string,label:string,description:string,category:string,content:string,license:string}>
      */
     public static function commonFiles(): array
     {
-        return [
+        $files = [
             [
                 'id' => 'refs-bib',
                 'path' => 'refs.bib',
                 'label' => 'Bibliography (refs.bib)',
                 'description' => 'BibTeX file for citations.',
+                'category' => 'starters',
+                'license' => Catalog::LICENSE_ID,
                 'content' => <<<'BIB'
 @article{example2024,
   author  = {Author One and Author Two},
@@ -133,6 +150,8 @@ BIB,
                 'path' => 'abstract.tex',
                 'label' => 'Abstract section',
                 'description' => 'Separate abstract file to \\input{}.',
+                'category' => 'starters',
+                'license' => Catalog::LICENSE_ID,
                 'content' => <<<'TEX'
 \begin{abstract}
 Write your abstract here.
@@ -144,6 +163,8 @@ TEX,
                 'path' => 'introduction.tex',
                 'label' => 'Introduction section',
                 'description' => 'Chapter/section partial.',
+                'category' => 'starters',
+                'license' => Catalog::LICENSE_ID,
                 'content' => <<<'TEX'
 \section{Introduction}
 Start your introduction here.
@@ -154,6 +175,8 @@ TEX,
                 'path' => 'methods.tex',
                 'label' => 'Methods section',
                 'description' => 'Methods partial.',
+                'category' => 'starters',
+                'license' => Catalog::LICENSE_ID,
                 'content' => <<<'TEX'
 \section{Methods}
 Describe your methods here.
@@ -164,6 +187,8 @@ TEX,
                 'path' => 'conclusion.tex',
                 'label' => 'Conclusion section',
                 'description' => 'Conclusion partial.',
+                'category' => 'starters',
+                'license' => Catalog::LICENSE_ID,
                 'content' => <<<'TEX'
 \section{Conclusion}
 Summarize your findings here.
@@ -174,6 +199,8 @@ TEX,
                 'path' => 'appendix.tex',
                 'label' => 'Appendix',
                 'description' => 'Appendix partial.',
+                'category' => 'starters',
+                'license' => Catalog::LICENSE_ID,
                 'content' => <<<'TEX'
 \appendix
 \section{Appendix}
@@ -185,8 +212,11 @@ TEX,
                 'path' => 'macros.tex',
                 'label' => 'Macros / preamble helpers',
                 'description' => 'Custom commands to \\input{} from the preamble.',
+                'category' => 'macros',
+                'license' => Catalog::LICENSE_ID,
                 'content' => <<<'TEX'
 % Custom commands — \\input{macros} from your preamble
+\usepackage{xcolor}
 \newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
 TEX,
             ],
@@ -195,9 +225,25 @@ TEX,
                 'path' => 'section.tex',
                 'label' => 'Blank .tex file',
                 'description' => 'Empty section file.',
+                'category' => 'starters',
+                'license' => Catalog::LICENSE_ID,
                 'content' => "% New section file\n",
             ],
         ];
+
+        foreach (Catalog::macros() as $macro) {
+            $files[] = [
+                'id' => 'macro-' . $macro['id'],
+                'path' => $macro['path'],
+                'label' => $macro['name'],
+                'description' => $macro['description'],
+                'category' => (string) ($macro['category'] ?? 'macros'),
+                'license' => (string) ($macro['license'] ?? Catalog::LICENSE_ID),
+                'content' => $macro['content'],
+            ];
+        }
+
+        return $files;
     }
 
     public static function commonFileById(string $id): ?array

@@ -4,5 +4,13 @@
   "description": "Multi-chapter book with front matter, table of contents, appendix, and bibliography.",
   "category": "academic",
   "mainFile": "main.tex",
-  "engine": "pdflatex"
+  "engine": "pdflatex",
+  "longDescription": "Multi-chapter book with front matter, TOC, chapters, appendix, and bibliography.",
+  "tags": [
+    "book",
+    "chapters",
+    "long-form"
+  ],
+  "license": "MIT",
+  "licenseNote": "First-party SiamTeX content (MIT)."
 }

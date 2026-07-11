@@ -12,6 +12,7 @@ Screenshots in `docs/screenshots/` go stale quickly as the UI evolves — prefer
 |---|---|
 | Welcome & sign-in | GitHub OAuth when you want it, or local solo mode without a sign-in wall. |
 | Project dashboard | Searchable project list, template starters, AI project creation, import/export zip. |
+| Catalog | Browse templates, macro packs, package guidance, and curated resources; create a project from a template or add macros to the open project. |
 | Editor + live PDF | Multi-file editing, Insert menus, compile errors you can click, preview beside source. |
 | Add files & assets | Upload images, bibliographies, and extra `.tex` files without leaving the browser. |
 | Import Word (.docx) | Extract text and figures safely (no macros); figures saved under `figures/`; save a basic `.tex` or convert with AI and review before accept. |
@@ -19,7 +20,7 @@ Screenshots in `docs/screenshots/` go stale quickly as the UI evolves — prefer
 **Typical first session**
 
 1. Open the base URL (solo mode) or sign in with GitHub.
-2. Create a project from the **homework**, **resume**, **article**, or **blank** template.
+2. Create a project from a template (dashboard tiles, **New project**, or **Catalog** — e.g. homework, resume, lab report, article).
 3. Edit in the CodeMirror editor; use **Insert** menus for bold, headings, math, lists, and tables if you are new to LaTeX. Turn on **Spell** in the editor bar for offline underlines (right-click a misspelling for suggestions; commands and math are skipped).
 4. Watch the side-by-side PDF update after compile (debounced auto-compile or explicit Compile).
 5. Click a problem in the diagnostics panel to jump to the offending line.
@@ -51,6 +52,21 @@ Ask plain-English questions in the sidebar chat, attach project files with `@fil
 Also available: **AI fix problems** (send build log + sources → review minimal repair → accept) and **create project from prompt** on the dashboard.
 
 On multi-user hosts, an administrator must enable AI features per account (**AI access**). See [ai-providers.md](./ai-providers.md) and [AI.md](../AI.md).
+
+---
+
+## Catalog (templates & macros)
+
+Open **Catalog** from the top bar, dashboard, or project toolbar.
+
+| What you can do | Notes |
+|---|---|
+| Browse templates | Filter by Templates; open a card to create a project with a guided name/engine flow. |
+| Add macro packs | Math helpers, theorem environments, SI units, resume snippets, tables, figures — copy or **Add to project** when a project is open. |
+| Package guidance | Usage snippets for geometry, hyperref, amsmath, natbib, booktabs, and more; CTAN links for full docs. |
+| Public resources | Links to CTAN, LaTeX Project docs, and community help (not redistributed). |
+
+Every catalog item shows its **license**. First-party templates and macros are MIT (`templates/LICENSE`). External package/resource licenses are noted separately.
 
 ---
 

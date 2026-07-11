@@ -118,7 +118,7 @@ Rebuild SiamTeX as a beautiful, responsive, security-first LaTeX IDE in the brow
 | F-72 | Starting a project from a template should be a first-class, guided flow. |
 | F-73 | Templates are **packages of files** (not a single `.tex` only): e.g. resume partials, `refs.bib`, section inputs. Creating a project copies the whole package. |
 | F-74 | **Add file** offers a list of **common starter files** (bibliography, abstract, section partials, macros, etc.) in addition to a custom path. |
-| F-75 | The TeX worker image must include packages required by first-party templates (e.g. `titlesec`, `enumitem`, `geometry`, `hyperref`, `natbib`). |
+| F-75 | The TeX worker image must include packages required by first-party templates (e.g. `titlesec`, `booktabs`, `enumitem`, `geometry`, `hyperref`, `natbib`). |
 
 ### 3.9 Author & Editor Tools
 
@@ -214,7 +214,7 @@ These are recommended defaults; adjust during implementation as needed.
 | Optional AI streaming | `api/ai_stream.php` (SSE proxy to provider); requires PHP **curl** extension; web server must not buffer long responses |
 | Storage | Local encrypted disk first; abstract the blob layer so S3-compatible storage can be added later |
 | Compile | **Dockerized TeX worker** (see §6.1), no outbound network, timeouts and ulimits |
-| Templates catalog | First-party curated templates only in v1 (resume, homework, article) |
+| Templates catalog | First-party curated catalog (templates, macros, package guidance, linked resources); no third-party federation in v1 |
 | Testing | Unit tests for authz/crypto/log parsing; integration tests for project CRUD and compile happy-path |
 | Distribution | `docker compose` (app + db + tex-worker) so anyone can install with one command |
 
@@ -325,7 +325,7 @@ TeX Live medium images are typically **~1.5–3 GB** on disk; a single compile c
 | TeX engines | **Standard:** `pdflatex`, `xelatex`, `lualatex` + BibTeX and Biber (`latexmk`). |
 | Storage (v1) | **Local encrypted disk now**; abstract blob layer for **S3-compatible later**. |
 | Retention | **Soft-delete projects 30 days**, then purge; **build artifacts ~7 days** (latest PDF retained while project is active). |
-| Catalog (v1) | **First-party curated templates only** (resume, homework, article). |
+| Catalog (v1) | **First-party curated catalog** (templates, macro packs, package guidance, linked public resources). |
 | TeX install model | **Containerized worker** via Docker Compose — not bare-metal TeX on the host. |
 | Public repository | Source may be public; secrets and `data/` never committed; Apache blocks `.git` / `.env` / `.gitignore` over HTTP. |
 | Beginner toolbar | Insert buttons for text, structure, math, resume snippets; selection-aware wrap. |

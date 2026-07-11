@@ -1,0 +1,12 @@
+{
+  "id": "handout",
+  "name": "Class handout",
+  "description": "One- or two-page handout with objectives, notes, and exercises.",
+  "longDescription": "Lightweight article layout for lecture notes or worksheets. Includes enumitem lists and a simple exercise section students can fill in.",
+  "category": "school",
+  "tags": ["handout", "worksheet", "notes", "teaching"],
+  "mainFile": "main.tex",
+  "engine": "pdflatex",
+  "license": "MIT",
+  "licenseNote": "First-party SiamTeX content (MIT)."
+}

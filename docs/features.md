@@ -19,7 +19,9 @@ Detailed inventory of what ships today. For a short pitch, see the [README](../R
 
 ## Projects & templates
 
-- Curated first-party templates: **blank**, **homework**, **resume** (multi-file package), **article**, **book**
+- Curated first-party templates: **blank**, **homework**, **resume**, **article**, **book**, **cover letter**, **lab report**, **handout**, **memo**
+- **Catalog** (F-71) — browseable UI for templates, macro/snippet packs, package guidance (with CTAN links), and curated public resources; license shown on every item
+- Macro packs (math helpers, theorem envs, SI units, resume snippets, booktabs table, figure include) — copy or add into an open project
 - Import / export **zip**
 - Upload images, PDFs, bibliographies, and extra sources into a project
 - **Word / DOCX import** — extract text and figures (macros never executed); images land under `figures/` as downloadable project assets; save as basic `.tex` or optional AI conversion with review-before-accept
@@ -74,7 +76,7 @@ Setup: [ai-providers.md](./ai-providers.md) · architecture: [AI.md](../AI.md).
 
 | Students | Researchers & professionals |
 |----------|------------------------------|
-| Homework / blank templates with editable starter text | Multi-file article projects with `refs.bib` and natbib |
+| Homework / lab report / handout templates with editable starter text | Multi-file article & book projects with `refs.bib` and natbib |
 | Toolbar / Insert menus — no memorizing `\begin{}` | Bibliography panel: search entries, insert citations |
 | Multiple PDFs (e.g. resume + cover letter) | Side-by-side PDF with auto-compile; click missing-citation warnings to add keys |
 | Clickable compile errors | Import/export zip, share links, page estimates, geometry |

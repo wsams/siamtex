@@ -1,0 +1,12 @@
+{
+  "id": "memo",
+  "name": "Memo / meeting notes",
+  "description": "Short memo layout for agendas, decisions, and action items.",
+  "longDescription": "Compact article-class memo with To/From/Date header fields and sections for agenda, notes, and action items. Good for lab meetings and project stand-ups.",
+  "category": "general",
+  "tags": ["memo", "meeting", "notes", "agenda"],
+  "mainFile": "main.tex",
+  "engine": "pdflatex",
+  "license": "MIT",
+  "licenseNote": "First-party SiamTeX content (MIT)."
+}

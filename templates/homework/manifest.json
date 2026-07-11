@@ -4,5 +4,13 @@
   "description": "Problem-set layout with math packages (main.tex).",
   "category": "school",
   "mainFile": "main.tex",
-  "engine": "pdflatex"
+  "engine": "pdflatex",
+  "longDescription": "Problem-set layout with amsmath, enumitem, and numbered Problem sections. Ideal for course assignments.",
+  "tags": [
+    "homework",
+    "math",
+    "school"
+  ],
+  "license": "MIT",
+  "licenseNote": "First-party SiamTeX content (MIT)."
 }

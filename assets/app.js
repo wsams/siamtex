@@ -17,7 +17,13 @@
     aiUsage: null,
     projects: [],
     templates: [],
+    macros: [],
+    packages: [],
+    resources: [],
+    catalogLicense: null,
     commonFiles: [],
+    catalogFilter: 'all',
+    catalogQuery: '',
     project: null,
     files: [],
     activePath: null,
@@ -117,7 +123,68 @@
     if (c === 'school') return '📝';
     if (c === 'academic') return '📚';
     if (c === 'career') return '📋';
+    if (c === 'macros' || c === 'snippets') return '⌘';
+    if (c === 'packages') return '📦';
+    if (c === 'resources') return '🔗';
+    if (c === 'general') return '📄';
     return '📄';
+  }
+
+  function catalogKindLabel(kind) {
+    if (kind === 'template') return 'Template';
+    if (kind === 'macro') return 'Macro pack';
+    if (kind === 'package') return 'Package';
+    if (kind === 'resource') return 'Resource';
+    return 'Item';
+  }
+
+  function applyCatalogPayload(tpl) {
+    if (!tpl || typeof tpl !== 'object') return;
+    state.templates = tpl.templates || state.templates;
+    state.macros = tpl.macros || state.macros;
+    state.packages = tpl.packages || state.packages;
+    state.resources = tpl.resources || state.resources;
+    state.commonFiles = tpl.commonFiles || state.commonFiles;
+    state.catalogLicense = tpl.license || state.catalogLicense;
+  }
+
+  async function ensureCatalog() {
+    if (state.templates.length && state.macros.length && state.packages.length) return;
+    const tpl = await api('/api/templates.php');
+    applyCatalogPayload(tpl);
+  }
+
+  function catalogMatchesQuery(item, q) {
+    if (!q) return true;
+    const hay = [
+      item.name,
+      item.description,
+      item.longDescription,
+      item.category,
+      item.id,
+      ...(item.tags || []),
+      ...(item.files || []),
+    ].filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(q);
+  }
+
+  function filteredCatalogItems() {
+    const q = (state.catalogQuery || '').trim().toLowerCase();
+    const filter = state.catalogFilter || 'all';
+    const items = [];
+    if (filter === 'all' || filter === 'templates') {
+      state.templates.forEach((t) => items.push({ kind: 'template', ...t }));
+    }
+    if (filter === 'all' || filter === 'macros') {
+      state.macros.forEach((m) => items.push({ kind: 'macro', ...m }));
+    }
+    if (filter === 'all' || filter === 'packages') {
+      state.packages.forEach((p) => items.push({ kind: 'package', ...p }));
+    }
+    if (filter === 'all' || filter === 'resources') {
+      state.resources.forEach((r) => items.push({ kind: 'resource', ...r }));
+    }
+    return items.filter((it) => catalogMatchesQuery(it, q));
   }
 
   function filterDashboardProjects() {
@@ -2364,6 +2431,7 @@
       ? `<img src="${esc(u.avatarUrl)}" alt="">`
       : `<span class="logo" style="width:28px;height:28px;font-size:.9rem">∫</span>`;
     $top().innerHTML = `
+      <button type="button" id="btnCatalog" class="ghost" title="Browse templates, macros, and package guides">Catalog</button>
       <span id="aiUsageGlobal" class="pill ai-usage-global hidden" title="Total AI tokens used on this account"></span>
       ${state.aiEnabled && aiCan('chat') ? '<button type="button" id="btnTopChat" class="ghost ai-sparkle-btn">✦ AI</button>' : ''}
       ${state.aiEnabled && aiCan('settings') ? '<button type="button" id="btnAiSettings" class="ghost">AI settings</button>' : ''}
@@ -2371,6 +2439,9 @@
       <div class="user-chip">${avatar}<span>${esc(u.name || u.login || 'User')}</span></div>
       ${state.oauthConfigured ? `<button type="button" id="btnLogout" class="ghost">Sign out</button>` : ''}`;
     renderGlobalAiUsage();
+    document.getElementById('btnCatalog')?.addEventListener('click', () => {
+      showCatalog().catch((e) => toast(e.message || 'Could not open catalog', 'error'));
+    });
     document.getElementById('btnTopChat')?.addEventListener('click', () => openAiPanel());
     document.getElementById('btnAiSettings')?.addEventListener('click', showAiSettings);
     document.getElementById('btnAdminAi')?.addEventListener('click', showAdminAiAccess);
@@ -2427,7 +2498,13 @@
           <button type="button" id="btnAiNewProject" class="primary ai-sparkle-btn">Create with AI</button>
         </div>` : '';
 
-    const templates = state.templates.map((t) => `
+    const featuredIds = ['homework', 'resume', 'article', 'lab-report', 'cover-letter', 'blank', 'book', 'handout', 'memo'];
+    const byId = Object.fromEntries(state.templates.map((t) => [t.id, t]));
+    const featured = featuredIds.map((id) => byId[id]).filter(Boolean);
+    state.templates.forEach((t) => {
+      if (!featuredIds.includes(t.id)) featured.push(t);
+    });
+    const templates = featured.map((t) => `
       <article class="template-tile">
         <div class="template-tile-head">
           <span class="template-tile-icon" aria-hidden="true">${templateIcon(t.category)}</span>
@@ -2436,10 +2513,13 @@
         <h3 class="template-tile-name">${esc(t.name)}</h3>
         <p class="template-tile-desc">${esc(t.description)}</p>
         <p class="template-tile-files">${esc((t.files || []).join(', '))}</p>
+        <p class="template-tile-license">${esc(t.license || 'MIT')}</p>
         <button type="button" class="template-tile-btn" data-tpl="${esc(t.id)}">Create from template</button>
       </article>`).join('');
 
     const projectCount = state.projects.length;
+    const tplCount = state.templates.length;
+    const macroCount = state.macros.length;
 
     $main().innerHTML = `
       <section class="dash">
@@ -2449,6 +2529,7 @@
             <p class="dash-lead">Your saved work — open a row to continue editing.</p>
           </div>
           <div class="dash-head-actions">
+            <button type="button" id="btnBrowseCatalog" class="ghost">Browse catalog</button>
             <button type="button" id="btnNew" class="primary">New project</button>
             <label class="btn dash-import-btn">
               Import zip
@@ -2467,13 +2548,16 @@
           ${projectCount ? `
           <div class="project-list" role="list">${projectRows}</div>
           <p id="dashProjectNoMatch" class="dash-empty hidden">No projects match your search.</p>
-          ` : `<p class="dash-empty">No projects yet — pick a template below or create a new project.</p>`}
+          ` : `<p class="dash-empty">No projects yet — pick a template below or browse the catalog.</p>`}
         </section>
 
         <section class="dash-templates" aria-label="Templates">
           <header class="dash-templates-head">
-            <h2>Templates</h2>
-            <p>Starter packages — choose one to create a <em>new</em> project (not listed above until you save it).</p>
+            <div>
+              <h2>Starter templates</h2>
+              <p>First-party packages — create a <em>new</em> project. Browse the full catalog for macros, package guides, and more (${tplCount} templates · ${macroCount} macro packs).</p>
+            </div>
+            <button type="button" id="btnBrowseCatalog2" class="ghost">Open catalog</button>
           </header>
           <div class="template-grid">${templates}</div>
         </section>
@@ -2498,6 +2582,9 @@
       el.addEventListener('click', () => showNewModal(el.getAttribute('data-tpl')));
     });
     document.getElementById('btnNew').onclick = () => showNewModal('blank');
+    const openCat = () => showCatalog().catch((e) => toast(e.message || 'Could not open catalog', 'error'));
+    document.getElementById('btnBrowseCatalog')?.addEventListener('click', openCat);
+    document.getElementById('btnBrowseCatalog2')?.addEventListener('click', openCat);
     document.getElementById('btnAiNewProject')?.addEventListener('click', showAiNewProject);
     document.getElementById('dashProjectSearch')?.addEventListener('input', filterDashboardProjects);
     document.getElementById('importFile').onchange = async (e) => {
@@ -2523,18 +2610,277 @@
     };
   }
 
+  async function showCatalog(options = {}) {
+    await ensureCatalog();
+    if (options.filter) state.catalogFilter = options.filter;
+    if (options.query != null) state.catalogQuery = options.query;
+    destroyEditor();
+    history.replaceState({}, '', BASE + '/#catalog');
+    renderCatalog();
+  }
+
+  function renderCatalog() {
+    const items = filteredCatalogItems();
+    const filter = state.catalogFilter || 'all';
+    const license = state.catalogLicense;
+    const filters = [
+      { id: 'all', label: 'All' },
+      { id: 'templates', label: `Templates (${state.templates.length})` },
+      { id: 'macros', label: `Macros (${state.macros.length})` },
+      { id: 'packages', label: `Packages (${state.packages.length})` },
+      { id: 'resources', label: `Resources (${state.resources.length})` },
+    ];
+
+    const cards = items.map((it) => {
+      const meta = it.kind === 'template'
+        ? `${(it.files || []).length} file${(it.files || []).length === 1 ? '' : 's'} · ${esc(it.engine || 'pdflatex')}`
+        : it.kind === 'package'
+          ? (it.inWorker ? 'In TeX worker' : 'External')
+          : it.kind === 'macro'
+            ? esc(it.path || 'snippet')
+            : 'External link';
+      return `
+      <article class="catalog-card" data-kind="${esc(it.kind)}" data-id="${esc(it.id)}" tabindex="0" role="button">
+        <div class="catalog-card-head">
+          <span class="catalog-card-icon" aria-hidden="true">${templateIcon(it.category || it.kind)}</span>
+          <span class="catalog-card-kind">${esc(catalogKindLabel(it.kind))}</span>
+        </div>
+        <h3 class="catalog-card-name">${esc(it.name)}</h3>
+        <p class="catalog-card-desc">${esc(it.description || '')}</p>
+        <div class="catalog-card-meta">
+          <span>${meta}</span>
+          <span class="catalog-card-license">${esc(it.license || 'MIT')}</span>
+        </div>
+        ${(it.tags || []).length ? `<p class="catalog-card-tags">${(it.tags || []).slice(0, 4).map((t) => `<span>${esc(t)}</span>`).join('')}</p>` : ''}
+      </article>`;
+    }).join('');
+
+    $main().innerHTML = `
+      <section class="catalog-page">
+        <header class="catalog-head">
+          <div>
+            <button type="button" id="catBack" class="ghost">${state.project?.id ? '← Back to project' : '← Projects'}</button>
+            <h1>Catalog</h1>
+            <p class="catalog-lead">Browse first-party templates, macro packs, package guidance, and curated public resources. Licensing is shown on every item.</p>
+          </div>
+        </header>
+
+        <div class="catalog-toolbar">
+          <input type="search" id="catalogSearch" class="dash-search" placeholder="Search templates, macros, packages…" value="${esc(state.catalogQuery || '')}" autocomplete="off" />
+          <div class="catalog-filters" role="tablist" aria-label="Catalog filters">
+            ${filters.map((f) => `
+              <button type="button" class="catalog-filter${filter === f.id ? ' active' : ''}" data-filter="${esc(f.id)}" role="tab" aria-selected="${filter === f.id}">${esc(f.label)}</button>
+            `).join('')}
+          </div>
+        </div>
+
+        ${license ? `
+        <p class="catalog-license-banner">
+          First-party content: <strong>${esc(license.name || license.id)}</strong>
+          ${license.url ? ` · <a href="${esc(license.url)}" target="_blank" rel="noopener noreferrer">License text</a>` : ''}
+          ${license.note ? ` — ${esc(license.note)}` : ''}
+        </p>` : ''}
+
+        <div class="catalog-grid" aria-label="Catalog results">
+          ${cards || '<p class="dash-empty">No catalog items match your search.</p>'}
+        </div>
+      </section>`;
+
+    document.getElementById('catBack').onclick = async () => {
+      if (state.project?.id) {
+        history.replaceState({}, '', BASE + '/?project=' + encodeURIComponent(state.project.id));
+        await openProject(state.project.id, state.shareToken);
+        return;
+      }
+      history.replaceState({}, '', BASE + '/');
+      await loadDashboard();
+    };
+    document.getElementById('catalogSearch')?.addEventListener('input', (e) => {
+      state.catalogQuery = e.target.value || '';
+      renderCatalog();
+      const input = document.getElementById('catalogSearch');
+      if (input) {
+        input.focus();
+        const len = input.value.length;
+        input.setSelectionRange(len, len);
+      }
+    });
+    $main().querySelectorAll('[data-filter]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.catalogFilter = btn.getAttribute('data-filter') || 'all';
+        renderCatalog();
+      });
+    });
+    $main().querySelectorAll('.catalog-card[data-id]').forEach((card) => {
+      const open = () => showCatalogDetail(card.getAttribute('data-kind'), card.getAttribute('data-id'));
+      card.addEventListener('click', open);
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          open();
+        }
+      });
+    });
+  }
+
+  function findCatalogItem(kind, id) {
+    if (kind === 'template') return state.templates.find((t) => t.id === id);
+    if (kind === 'macro') return state.macros.find((m) => m.id === id);
+    if (kind === 'package') return state.packages.find((p) => p.id === id);
+    if (kind === 'resource') return state.resources.find((r) => r.id === id);
+    return null;
+  }
+
+  function showCatalogDetail(kind, id) {
+    const item = findCatalogItem(kind, id);
+    if (!item) {
+      toast('Catalog item not found', 'error');
+      return;
+    }
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    const tags = (item.tags || []).map((t) => `<span class="catalog-tag">${esc(t)}</span>`).join('');
+    let body = '';
+    let actions = `<button type="button" id="catDetailClose">Close</button>`;
+
+    if (kind === 'template') {
+      body = `
+        <p>${esc(item.longDescription || item.description || '')}</p>
+        <p class="catalog-detail-meta"><strong>Category:</strong> ${esc(item.category || 'general')}
+          · <strong>Engine:</strong> ${esc(item.engine || 'pdflatex')}
+          · <strong>Main file:</strong> ${esc(item.mainFile || 'main.tex')}</p>
+        <p class="catalog-detail-meta"><strong>Files:</strong> <code>${esc((item.files || []).join(', '))}</code></p>
+        <label>Project name</label>
+        <input id="catTplName" type="text" value="${esc(item.name)}" />
+        <label>Engine</label>
+        <select id="catTplEngine">
+          <option value="pdflatex" ${item.engine === 'pdflatex' ? 'selected' : ''}>pdflatex</option>
+          <option value="xelatex" ${item.engine === 'xelatex' ? 'selected' : ''}>xelatex</option>
+          <option value="lualatex" ${item.engine === 'lualatex' ? 'selected' : ''}>lualatex</option>
+        </select>`;
+      actions = `
+        <button type="button" id="catDetailClose">Cancel</button>
+        <button type="button" id="catTplCreate" class="primary">Create project &amp; open</button>`;
+    } else if (kind === 'macro') {
+      body = `
+        <p>${esc(item.description || '')}</p>
+        <p class="catalog-detail-meta"><strong>Suggested path:</strong> <code>${esc(item.path)}</code></p>
+        <pre class="catalog-code">${esc(item.content || '')}</pre>
+        <p class="catalog-hint">Add this file to the open project, or copy it into your preamble / editor.</p>`;
+      actions = `
+        <button type="button" id="catDetailClose">Close</button>
+        <button type="button" id="catMacroCopy">Copy</button>
+        ${state.project && canEditProject(state.project) ? '<button type="button" id="catMacroAdd" class="primary">Add to project</button>' : '<button type="button" id="catMacroNeedProject" class="primary">Open a project to add</button>'}`;
+    } else if (kind === 'package') {
+      body = `
+        <p>${esc(item.description || '')}</p>
+        <p class="catalog-detail-meta">${item.inWorker ? 'Available in the SiamTeX TeX worker image.' : 'May require a custom TeX image.'}</p>
+        <label>Usage</label>
+        <pre class="catalog-code">${esc(item.usage || '')}</pre>
+        ${item.ctanUrl ? `<p><a href="${esc(item.ctanUrl)}" target="_blank" rel="noopener noreferrer">View on CTAN ↗</a></p>` : ''}`;
+      actions = `
+        <button type="button" id="catDetailClose">Close</button>
+        <button type="button" id="catPkgCopy">Copy usage</button>
+        ${state.project && state.editor && !state.editor.getOption('readOnly') ? '<button type="button" id="catPkgInsert" class="primary">Insert at cursor</button>' : ''}`;
+    } else {
+      body = `
+        <p>${esc(item.description || '')}</p>
+        <p class="catalog-detail-meta">${esc(item.licenseNote || '')}</p>
+        ${item.url ? `<p><a class="btn primary" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open resource ↗</a></p>` : ''}`;
+    }
+
+    backdrop.innerHTML = `
+      <div class="modal modal-wide catalog-detail-modal">
+        <div class="catalog-detail-head">
+          <span class="catalog-card-icon" aria-hidden="true">${templateIcon(item.category || kind)}</span>
+          <div>
+            <p class="catalog-card-kind">${esc(catalogKindLabel(kind))}</p>
+            <h2>${esc(item.name)}</h2>
+          </div>
+        </div>
+        ${tags ? `<div class="catalog-tag-row">${tags}</div>` : ''}
+        ${body}
+        <p class="catalog-license-line"><strong>License:</strong> ${esc(item.license || 'MIT')}
+          ${item.licenseNote ? ` — ${esc(item.licenseNote)}` : ''}</p>
+        <div class="modal-actions">${actions}</div>
+      </div>`;
+    document.body.appendChild(backdrop);
+    backdrop.querySelector('#catDetailClose').onclick = () => backdrop.remove();
+
+    if (kind === 'template') {
+      backdrop.querySelector('#catTplCreate').onclick = async () => {
+        try {
+          const name = backdrop.querySelector('#catTplName').value.trim() || item.name;
+          const engine = backdrop.querySelector('#catTplEngine').value;
+          const data = await api('/api/projects.php', {
+            method: 'POST',
+            json: { name, template: item.id, engine },
+          });
+          backdrop.remove();
+          await openProject(data.project.id);
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      };
+    } else if (kind === 'macro') {
+      backdrop.querySelector('#catMacroCopy')?.addEventListener('click', async () => {
+        await navigator.clipboard.writeText(item.content || '');
+        toast('Copied macro pack', 'ok');
+      });
+      backdrop.querySelector('#catMacroNeedProject')?.addEventListener('click', () => {
+        backdrop.remove();
+        toast('Open or create a project, then add this macro from the catalog', 'ok');
+      });
+      backdrop.querySelector('#catMacroAdd')?.addEventListener('click', async () => {
+        try {
+          const path = item.path;
+          const existing = (state.files || []).some((f) => f.path === path);
+          if (existing && !confirm(`${path} already exists. Overwrite?`)) return;
+          await api('/api/files.php?id=' + encodeURIComponent(state.project.id), {
+            method: 'PUT',
+            json: { path, content: item.content },
+          });
+          state.contents[path] = item.content;
+          backdrop.remove();
+          toast(`Added ${path}`, 'ok');
+          await openProject(state.project.id);
+          await loadFile(path);
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      });
+    } else if (kind === 'package') {
+      backdrop.querySelector('#catPkgCopy')?.addEventListener('click', async () => {
+        await navigator.clipboard.writeText(item.usage || '');
+        toast('Copied package usage', 'ok');
+      });
+      backdrop.querySelector('#catPkgInsert')?.addEventListener('click', () => {
+        if (state.editor && !state.editor.getOption('readOnly')) {
+          const doc = state.editor.getDoc();
+          doc.replaceRange((item.usage || '') + '\n', doc.getCursor());
+          markDirtyFromEditor();
+          toast('Inserted package line', 'ok');
+          backdrop.remove();
+        }
+      });
+    }
+  }
+
   function showNewModal(templateId) {
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop';
+    const selected = state.templates.find((t) => t.id === templateId) || state.templates[0];
     backdrop.innerHTML = `
       <div class="modal">
         <h2>New project</h2>
-        <p>The template fills the editor with starter text you can change.</p>
+        <p>Pick a first-party template — the package fills the editor with starter files you can change.</p>
         <label>Name</label>
         <input id="npName" type="text" value="Untitled" />
         <label>Template</label>
         <select id="npTpl">${state.templates.map((t) =>
-          `<option value="${esc(t.id)}" ${t.id === templateId ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
+          `<option value="${esc(t.id)}" ${t.id === templateId ? 'selected' : ''}>${esc(t.name)} (${esc(t.category || 'general')})</option>`).join('')}</select>
+        <p id="npTplDesc" class="catalog-hint">${esc(selected?.description || '')}</p>
+        <p class="catalog-license-line"><strong>License:</strong> ${esc(selected?.license || 'MIT')}</p>
         <label>Engine</label>
         <select id="npEngine">
           <option value="pdflatex">pdflatex (recommended)</option>
@@ -2542,12 +2888,28 @@
           <option value="lualatex">lualatex</option>
         </select>
         <div class="modal-actions">
+          <button type="button" id="npBrowse">Browse catalog</button>
           <button type="button" id="npCancel">Cancel</button>
           <button type="button" id="npCreate" class="primary">Create &amp; open</button>
         </div>
       </div>`;
     document.body.appendChild(backdrop);
+    const tplSelect = backdrop.querySelector('#npTpl');
+    const descEl = backdrop.querySelector('#npTplDesc');
+    const licEl = backdrop.querySelector('.catalog-license-line');
+    const syncTplMeta = () => {
+      const t = state.templates.find((x) => x.id === tplSelect.value);
+      if (descEl) descEl.textContent = t?.description || '';
+      if (licEl) licEl.innerHTML = `<strong>License:</strong> ${esc(t?.license || 'MIT')}`;
+      if (t?.engine) backdrop.querySelector('#npEngine').value = t.engine;
+    };
+    tplSelect.addEventListener('change', syncTplMeta);
+    syncTplMeta();
     backdrop.querySelector('#npCancel').onclick = () => backdrop.remove();
+    backdrop.querySelector('#npBrowse').onclick = () => {
+      backdrop.remove();
+      showCatalog({ filter: 'templates' }).catch((e) => toast(e.message || 'Could not open catalog', 'error'));
+    };
     backdrop.querySelector('#npCreate').onclick = async () => {
       try {
         const name = backdrop.querySelector('#npName').value.trim() || 'Untitled';
@@ -2665,8 +3027,7 @@
       api('/api/templates.php'),
     ]);
     state.projects = proj.projects || [];
-    state.templates = tpl.templates || [];
-    state.commonFiles = tpl.commonFiles || [];
+    applyCatalogPayload(tpl);
     state.project = null;
     state.activePath = null;
     renderDashboard();
@@ -2993,6 +3354,7 @@
           <button type="button" id="btnExport">Export</button>
           ${p.role === 'owner' ? '<button type="button" id="btnShare">Share</button>' : ''}
           <button type="button" id="btnBibliography" title="Bibliography — add entries, search, insert citations">Bibliography</button>
+          <button type="button" id="btnCatalogWs" title="Browse templates, macros, and packages">Catalog</button>
           <button type="button" id="btnTools">Tools</button>
           <button type="button" id="btnHistory" title="Version history">History</button>
           <span id="aiUsageProject" class="pill ai-usage-project hidden" title="AI token usage for this project"></span>
@@ -3061,6 +3423,9 @@
       showBibliography().catch((e) => toast(e.message || 'Could not open bibliography', 'error'));
     });
     document.getElementById('btnTools').onclick = showTools;
+    document.getElementById('btnCatalogWs')?.addEventListener('click', () => {
+      showCatalog().catch((e) => toast(e.message || 'Could not open catalog', 'error'));
+    });
     document.getElementById('btnAiPanel')?.addEventListener('click', () => openAiPanel());
     document.getElementById('btnHistory')?.addEventListener('click', showHistory);
     document.getElementById('btnAddFile')?.addEventListener('click', () => {
@@ -3583,10 +3948,7 @@
   }
 
   async function ensureCommonFiles() {
-    if (state.commonFiles.length) return;
-    const tpl = await api('/api/templates.php');
-    state.templates = tpl.templates || state.templates;
-    state.commonFiles = tpl.commonFiles || [];
+    await ensureCatalog();
   }
 
   /** Match server safePath: spaces and odd chars → underscores (LaTeX-friendly). */
@@ -5436,6 +5798,8 @@ ${body}\\end{document}
       const token = params.get('token');
       if (projectId) {
         await openProject(projectId, token);
+      } else if ((location.hash || '').replace(/^#/, '') === 'catalog') {
+        await showCatalog();
       } else {
         await loadDashboard();
       }
