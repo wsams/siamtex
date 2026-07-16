@@ -1,0 +1,60 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":semanticPrefixFixDepsChoreOthers",
+    ":automergeAll",
+    ":automergeDigest",
+    "helpers:pinGitHubActionDigestsToSemver"
+  ],
+  "labels": ["dependencies"],
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Renovate Dependency Dashboard",
+  "timezone": "America/Chicago",
+  "schedule": ["after 5am and before 10pm every weekday"],
+  "prHourlyLimit": 5,
+  "prConcurrentLimit": 10,
+  "rangeStrategy": "bump",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true
+  },
+  "platformAutomerge": true,
+  "automergeStrategy": "squash",
+  "ignoreTests": true,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Update pinned Renovate Docker tag in the workflow",
+      "managerFilePatterns": ["/^\\.github/workflows/renovate\\.ya?ml$/"],
+      "matchStrings": [
+        "renovate-version:\\s*(?<currentValue>[^\\s#]+)"
+      ],
+      "depNameTemplate": "ghcr.io/renovatebot/renovate",
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Group GitHub Actions updates",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "description": "Group Composer PHP dependencies",
+      "matchManagers": ["composer"],
+      "groupName": "Composer dependencies"
+    },
+    {
+      "description": "Automerge Docker base image updates",
+      "matchManagers": ["dockerfile", "docker-compose"],
+      "automerge": true
+    },
+    {
+      "description": "Automerge Renovate bot image pin",
+      "matchDepNames": ["ghcr.io/renovatebot/renovate"],
+      "automerge": true
+    }
+  ]
+}

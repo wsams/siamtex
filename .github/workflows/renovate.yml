@@ -1,0 +1,45 @@
+name: Renovate
+
+on:
+  schedule:
+    # Every 2 hours — keep dependency PRs timely without burning too many minutes.
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: Renovate log level
+        required: false
+        default: info
+        type: choice
+        options:
+          - info
+          - debug
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/renovate.yml
+      - renovate.json
+
+concurrency:
+  group: renovate-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  renovate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Self-hosted Renovate
+        uses: renovatebot/github-action@v46.1.19
+        with:
+          token: ${{ secrets.RENOVATE_TOKEN }}
+          # Pin the bot image; Renovate will open PRs to bump this value.
+          renovate-version: 43.264.2
+        env:
+          LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
