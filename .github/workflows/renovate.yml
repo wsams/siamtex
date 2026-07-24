@@ -42,4 +42,9 @@ jobs:
           # Pin the bot image; Renovate will open PRs to bump this value.
           renovate-version: 43.264.2
         env:
+          # Required for self-hosted runs: without this, Renovate exits with
+          # "No repositories found - did you want to run with flag --autodiscover?"
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
+          # Prefer commits as the token user rather than the shared Mend author.
+          RENOVATE_PLATFORM_COMMIT: "true"
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
