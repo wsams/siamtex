@@ -40,7 +40,7 @@ jobs:
         with:
           token: ${{ secrets.RENOVATE_TOKEN }}
           # Pin the bot image; Renovate will open PRs to bump this value.
-          renovate-version: 43.264.2
+          renovate-version: 43.279.0
         env:
           # Required for self-hosted runs: without this, Renovate exits with
           # "No repositories found - did you want to run with flag --autodiscover?"
